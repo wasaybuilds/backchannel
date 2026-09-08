@@ -22,8 +22,12 @@ export async function startCapture(onChunk: (pcm: ArrayBuffer) => void): Promise
     throw new Error('No loopback audio track. Loopback capture is Windows-only.')
   }
 
+  // Echo cancellation is load-bearing, not cosmetic: without it the call audio
+  // coming out of your speakers is picked up by the mic, so every question the
+  // other person asks is transcribed on BOTH channels and attributed to you too.
+  // Headphones make this moot; AEC is what saves you when you forget them.
   const mic = await navigator.mediaDevices.getUserMedia({
-    audio: { echoCancellation: false, noiseSuppression: true, autoGainControl: true }
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
   })
 
   const ctx = new AudioContext()

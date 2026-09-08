@@ -9,6 +9,9 @@ export interface TranscriptTurn {
   text: string
   /** False while Deepgram is still revising these words. */
   final: boolean
+  /** Set when this mic turn turned out to be the far side coming back through
+   *  the speakers. Kept rather than deleted so the UI can grey it out. */
+  echo?: boolean
   at: number
 }
 

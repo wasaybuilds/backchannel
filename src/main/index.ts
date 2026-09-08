@@ -93,17 +93,28 @@ function startServices(): void {
     onTranscript: (speaker, text, final) => {
       const turn = transcript.ingest(speaker, text, final)
       if (turn) send(CH.transcript, turn)
+      if (final) console.log(`[${speaker}] ${text}`)
       if (!final || speaker !== 'them') return
       if (!Transcript.isQuestion(text) || text.trim() === lastAsked) return
       void ask(text.trim())
     }
   })
 
+  // Mirror answers to the terminal so a dev run is legible without the overlay.
+  const spoken = new Map<string, string>()
+
   brain = new Brain(transcript, {
-    onStart: (id, tier, question, withScreenshot) =>
-      send(CH.answerStart, { id, tier, question, withScreenshot }),
-    onDelta: (id, tier, text) => send(CH.answerDelta, { id, tier, text, done: false }),
+    onStart: (id, tier, question, withScreenshot) => {
+      spoken.set(`${id}:${tier}`, '')
+      send(CH.answerStart, { id, tier, question, withScreenshot })
+    },
+    onDelta: (id, tier, text) => {
+      spoken.set(`${id}:${tier}`, (spoken.get(`${id}:${tier}`) ?? '') + text)
+      send(CH.answerDelta, { id, tier, text, done: false })
+    },
     onDone: (id, tier: AnswerTier) => {
+      console.log(`[${tier}] ${spoken.get(`${id}:${tier}`) ?? ''}`)
+      spoken.delete(`${id}:${tier}`)
       send(CH.answerDelta, { id, tier, text: '', done: true })
       if (tier === 'full') setStatus({ kind: 'listening' })
     },
