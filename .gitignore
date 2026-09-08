@@ -11,3 +11,4 @@ context/
 !context/.gitkeep
 bc-run.log
 bc-code.log
+bc-hover.log
