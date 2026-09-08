@@ -136,9 +136,12 @@ export const HOTKEYS = {
   show: process.env.HOTKEY_SHOW || 'Alt+S',
   answerNow: process.env.HOTKEY_ANSWER || 'Alt+Space',
   answerScreen: process.env.HOTKEY_SCREEN || 'Alt+D',
-  toggleClickThrough: process.env.HOTKEY_CLICK || 'Alt+C',
   // Copy code in your editor, press this, get working code back.
   solveClipboard: process.env.HOTKEY_CODE || 'Alt+V',
+  // The panel never takes the mouse, so scrolling and copying are keys.
+  scrollUp: process.env.HOTKEY_UP || 'Alt+Up',
+  scrollDown: process.env.HOTKEY_DOWN || 'Alt+Down',
+  copyCode: process.env.HOTKEY_COPY || 'Alt+X',
   // The window is frameless and hidden from the taskbar, so without this the
   // only way out is Task Manager.
   quit: process.env.HOTKEY_QUIT || 'Alt+Q'
@@ -150,7 +153,9 @@ export const HOTKEY_ENV: Record<keyof typeof HOTKEYS, string> = {
   show: 'HOTKEY_SHOW',
   answerNow: 'HOTKEY_ANSWER',
   answerScreen: 'HOTKEY_SCREEN',
-  toggleClickThrough: 'HOTKEY_CLICK',
   solveClipboard: 'HOTKEY_CODE',
+  scrollUp: 'HOTKEY_UP',
+  scrollDown: 'HOTKEY_DOWN',
+  copyCode: 'HOTKEY_COPY',
   quit: 'HOTKEY_QUIT'
 }

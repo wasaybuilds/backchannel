@@ -8,23 +8,8 @@ import { Brain } from './brain'
 import { screenshot } from './capture'
 
 let win: BrowserWindow | null = null
-/** User pressed the hotkey to make the panel permanently inert. */
-let pinnedThrough = false
-
-/**
- * Clicks and the scroll wheel reach the panel only while the pointer is over
- * it. The rest of the time they pass through to the call behind.
- *
- * This is what makes the panel scrollable at all: `setIgnoreMouseEvents` sends
- * the wheel to whatever is underneath, so without hover handling you physically
- * cannot scroll back to an earlier answer. `forward: true` keeps delivering
- * mousemove to the renderer while ignoring is on, which is how it notices the
- * pointer arriving.
- */
-function applyMouse(hovering: boolean): void {
-  const ignore = pinnedThrough || !hovering
-  win?.setIgnoreMouseEvents(ignore, { forward: true })
-}
+/** Newest code answer, kept so a hotkey can put it on the clipboard. */
+let lastCode = ''
 const transcript = new Transcript()
 let stt: Stt | null = null
 let brain: Brain | null = null
@@ -66,7 +51,12 @@ function createWindow(): void {
   win.setContentProtection(true)
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  applyMouse(false)
+
+  // Permanently inert. Every click and every wheel tick goes to whatever is
+  // underneath — the call, the editor, the browser. An overlay that ever
+  // swallows a click meant for the app behind it is worse than useless during
+  // a meeting, so the panel is scrolled and copied from with hotkeys instead.
+  win.setIgnoreMouseEvents(true)
 
   win.once('ready-to-show', () => win?.showInactive())
 
@@ -130,7 +120,9 @@ function startServices(): void {
       send(CH.answerDelta, { id, tier, text, done: false })
     },
     onDone: (id, tier: AnswerTier) => {
-      console.log(`[${tier}] ${spoken.get(`${id}:${tier}`) ?? ''}`)
+      const text = spoken.get(`${id}:${tier}`) ?? ''
+      console.log(`[${tier}] ${text}`)
+      if (tier === 'code') lastCode = extractCode(text)
       spoken.delete(`${id}:${tier}`)
       send(CH.answerDelta, { id, tier, text: '', done: true })
       if (tier === 'full') setStatus({ kind: 'listening' })
@@ -189,13 +181,20 @@ function registerHotkeys(): void {
     app.quit()
   })
 
-  globalShortcut.register(HOTKEYS.toggleClickThrough, () => {
-    // Pinning click-through off entirely, for when you want the panel to be
-    // completely inert over a shared window. Content protection is untouched
-    // either way — this only decides where clicks land.
-    pinnedThrough = !pinnedThrough
-    applyMouse(false)
-    send(CH.visibility, { clickThrough: pinnedThrough })
+  // The panel takes no mouse input at all, so these are the only way to move
+  // through a long answer or get code out of it.
+  globalShortcut.register(HOTKEYS.scrollUp, () => send(CH.scroll, 'up'))
+  globalShortcut.register(HOTKEYS.scrollDown, () => send(CH.scroll, 'down'))
+
+  globalShortcut.register(HOTKEYS.copyCode, () => {
+    if (!lastCode) {
+      setStatus({ kind: 'error', message: 'no code answer yet — press Alt+V first' })
+      return
+    }
+    clipboard.writeText(lastCode)
+    console.log(`[code] copied ${lastCode.length} chars to clipboard`)
+    setStatus({ kind: 'copied' })
+    setTimeout(() => setStatus({ kind: 'listening' }), 1200)
   })
 
   for (const [name, accel] of Object.entries(HOTKEYS)) {
@@ -250,7 +249,6 @@ if (isOnlyInstance) app.whenReady().then(() => {
 
   ipcMain.on(CH.ask, (_e, question: string) => void ask(question))
 
-  ipcMain.on(CH.interactive, (_e, hovering: boolean) => applyMouse(hovering))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -263,3 +261,17 @@ app.on('will-quit', () => {
 })
 
 app.on('window-all-closed', () => app.quit())
+
+/**
+ * Pull the fenced block out of a code answer.
+ *
+ * The answer also carries a line to say out loud and a trailing note, and
+ * pasting those into an editor alongside the code would be embarrassing — so
+ * the clipboard gets the code only. Falls back to the whole text when the model
+ * did not fence it.
+ */
+function extractCode(answer: string): string {
+  const blocks = [...answer.matchAll(/```[a-zA-Z0-9+#-]*\n([\s\S]*?)```/g)]
+  if (!blocks.length) return answer.trim()
+  return blocks.map((m) => m[1].replace(/\s+$/, '')).join('\n\n')
+}

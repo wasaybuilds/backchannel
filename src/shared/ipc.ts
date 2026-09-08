@@ -40,6 +40,7 @@ export type Status =
   | { kind: 'idle' }
   | { kind: 'listening' }
   | { kind: 'thinking' }
+  | { kind: 'copied' }
   | { kind: 'error'; message: string }
 
 export const CH = {
@@ -56,6 +57,8 @@ export const CH = {
   visibility: 'ui:visibility',
   /** renderer -> main: user typed a question into the panel. */
   ask: 'ask',
-  /** renderer -> main: pointer entered/left the panel, so the wheel can reach it. */
-  interactive: 'ui:interactive'
+  /** main -> renderer: scroll the answers by a hotkey, since the mouse cannot. */
+  scroll: 'ui:scroll',
+  /** renderer -> main: the newest code answer, so a hotkey can copy it out. */
+  codeAnswer: 'ui:code-answer'
 } as const

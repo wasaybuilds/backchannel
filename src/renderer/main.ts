@@ -33,7 +33,7 @@ const cards = new Map<string, { gist: HTMLElement; full: HTMLElement; code: HTML
 
 window.bc.onStatus((s: Status) => {
   dotEl.className = s.kind
-  statusEl.textContent = s.kind === 'error' ? s.message : s.kind
+  statusEl.textContent = s.kind === 'error' ? s.message : s.kind === 'copied' ? 'copied to clipboard' : s.kind
   statusEl.style.color = s.kind === 'error' ? 'var(--err)' : ''
 })
 
@@ -87,23 +87,15 @@ window.bc.onTranscript((t: TranscriptTurn) => {
 })
 
 /**
- * Tell the main process when the pointer is over the panel.
- *
- * The window ignores mouse events so clicks fall through to the call, but that
- * also means the scroll wheel never reaches us. `forward: true` keeps delivering
- * mousemove, so we can switch interactivity on the moment the pointer arrives
- * and back off when it leaves.
+ * Scroll by hotkey. The window ignores mouse input entirely so a click is never
+ * stolen from the call behind it, which also means the wheel never reaches us —
+ * these keys are the only way to move through a long answer.
  */
-function trackHover(): void {
-  let inside = false
-  const set = (on: boolean): void => {
-    if (on === inside) return
-    inside = on
-    window.bc.setInteractive(on)
-  }
-  document.addEventListener('mousemove', () => set(true))
-  document.addEventListener('mouseleave', () => set(false))
-  window.addEventListener('blur', () => set(false))
+function wireScrolling(): void {
+  window.bc.onScroll((dir) => {
+    const step = Math.max(80, answersEl.clientHeight * 0.8)
+    answersEl.scrollBy({ top: dir === 'up' ? -step : step, behavior: 'smooth' })
+  })
 }
 
 async function boot(): Promise<void> {
@@ -121,5 +113,5 @@ async function boot(): Promise<void> {
   }
 }
 
-trackHover()
+wireScrolling()
 void boot()

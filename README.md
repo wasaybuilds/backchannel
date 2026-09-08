@@ -160,7 +160,8 @@ CV and deal notes never leave the machine except to the two APIs.
 | `Alt+H` | Hide the panel |
 | `Alt+S` | Show it again |
 | `Alt+V` | Solve whatever I just copied — returns code |
-| `Alt+C` | Toggle click-through |
+| `Alt+X` | Copy that code to my clipboard |
+| `Alt+↑` / `Alt+↓` | Scroll the answers |
 | `Alt+Q` | Quit |
 
 It also fires on its own whenever the other person finishes something that reads
@@ -168,7 +169,8 @@ like a question — including "So walk me through…" and "Okay, and how big was
 team.", which do not open on an interrogative or end in a question mark.
 
 Override any key with `HOTKEY_HIDE`, `HOTKEY_SHOW`, `HOTKEY_ANSWER`,
-`HOTKEY_SCREEN`, `HOTKEY_CODE`, `HOTKEY_CLICK`, `HOTKEY_QUIT` in `.env`.
+`HOTKEY_SCREEN`, `HOTKEY_CODE`, `HOTKEY_COPY`, `HOTKEY_UP`, `HOTKEY_DOWN`,
+`HOTKEY_QUIT` in `.env`.
 
 **Why Alt and not Shift.** These register system-wide. A bare `Shift+H` would
 swallow every capital H you type — in Zoom chat, in your editor, everywhere —
@@ -176,14 +178,18 @@ and hide the panel instead. Alt is the lightest modifier that does not collide
 with typing. If another app already owns a shortcut, startup logs which one was
 refused rather than failing silently.
 
-**Scrolling and clicking.** Move the pointer over the panel and it becomes
-interactive — wheel, selection, click. Move away and everything falls through to
-the call behind, so it never intercepts a click you meant for Zoom. `Alt+C` pins
-it fully inert if you want that guarantee.
+**The panel takes no mouse input, ever.** No clicks, no selection, no cursor
+change — every click and wheel tick passes through to whatever is underneath.
+An overlay that occasionally swallows a click meant for Zoom or your editor is
+worse than one you cannot point at, so scrolling is `Alt+↑`/`Alt+↓` and code
+leaves via `Alt+X` rather than a drag-select. One key beats sweeping a
+selection with a mouse the panel cannot see.
 
-Answers only auto-scroll while you are already at the bottom. Scroll up to
-re-read an earlier answer and streaming text will not drag you back down
-mid-sentence.
+`Alt+X` copies just the fenced code, not the line you were meant to say aloud
+or the trailing note — pasting those into an editor would be its own tell.
+
+Answers only auto-scroll while you are already at the bottom, so scrolling up
+to re-read will not be undone by the next streaming token.
 
 **Clicking it never reveals it.** Content protection and mouse handling are
 independent — the panel is excluded from capture whether or not you can click

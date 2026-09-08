@@ -36,7 +36,6 @@ body {
   gap: 4px 8px;
   padding: 9px 12px;
   border-bottom: 1px solid var(--line);
-  -webkit-app-region: drag;
 }
 
 #dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); flex: none; }
@@ -134,22 +133,16 @@ body {
      for a new statement at the same indent level. */
   padding-left: 14px;
   text-indent: -14px;
-  user-select: text;
   tab-size: 2;
 }
 .answer .code:empty { display: none; }
 
-/* Hover makes the panel interactive so the wheel reaches it, but interactive
-   must not LOOK like an editor. Force the plain arrow everywhere: no I-beam
-   over text, no resize handles, nothing that reads as "you are selecting". */
-#panel, #panel * { cursor: default; }
-
-/* The title strip is the one place a different cursor earns itself — it tells
-   you the panel can be dragged somewhere less in the way. */
-#bar { cursor: move; }
-
-/* Code stays selectable (declared above) so you can copy it out; only the
-   I-beam is gone. Make the highlight legible when you do drag across it. */
-.answer .code::selection, .answer .code *::selection {
-  background: rgba(120, 170, 255, 0.32);
+/* The window takes no mouse input at all, so nothing here is selectable or
+   clickable and no cursor ever changes over it. Code leaves via Alt+X rather
+   than a drag-select — one key beats trying to sweep a selection with a mouse
+   the panel cannot even see. */
+#panel, #panel * {
+  cursor: default;
+  user-select: none;
+  -webkit-user-drag: none;
 }
