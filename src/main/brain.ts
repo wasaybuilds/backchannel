@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { AnswerTier } from '@shared/ipc'
-import { FULL_MODEL, GIST_MODEL, keys, meetingContext } from './config'
+import { briefingPdfs, FULL_MODEL, GIST_MODEL, keys, meetingContext } from './config'
 import type { Transcript } from './transcript'
 
 /**
@@ -77,23 +77,33 @@ export class Brain {
 
   private async gist(id: string, question: string, signal: AbortSignal): Promise<void> {
     this.events.onStart(id, 'gist', question, false)
+    const began = Date.now()
+    let firstToken = 0
     try {
       const stream = this.client.messages.stream(
         {
           model: GIST_MODEL,
           max_tokens: 200,
-          // The brief matters more here than anywhere: this tier has no
-          // conversation history to fall back on, so without it the fast answer
-          // is a generic non-answer that beats the real one onto the screen.
-          cache_control: { type: 'ephemeral' },
+          // NOTE: no top-level cache_control here. This tier keeps no history,
+          // so its last block is the ever-changing transcript tail — auto-caching
+          // it would rewrite the cache every call and never read one. The
+          // breakpoints below sit on the stable prefix instead.
           system: [
             { type: 'text', text: GIST_PERSONA },
-            { type: 'text', text: `MEETING CONTEXT\n${meetingContext()}` }
+            {
+              type: 'text',
+              text: `MEETING CONTEXT\n${meetingContext()}`,
+              cache_control: { type: 'ephemeral' }
+            }
           ],
           messages: [
+            // The fast tier needs the same documents as the slow one. Without
+            // them it confidently announces it has no context, and because it
+            // is fast that non-answer is the first thing on screen.
+            ...this.briefingTurns(),
             {
               role: 'user',
-              content: `Recent call transcript:\n${this.transcript.tail(8)}\n\nTHEM just asked: ${question}\n\nOne or two lines.`
+              content: `Recent call transcript:\n${this.transcript.tail(8)}\n\nTHEM just asked: ${question}\n\nOne sentence they can start saying now.`
             }
           ]
         },
@@ -101,11 +111,12 @@ export class Brain {
       )
       for await (const ev of stream) {
         if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+          firstToken ||= Date.now() - began
           this.events.onDelta(id, 'gist', ev.delta.text)
         }
       }
       const gu = (await stream.finalMessage()).usage
-      console.log(`[gist usage] in=${gu.input_tokens} cache_read=${gu.cache_read_input_tokens ?? 0} out=${gu.output_tokens}`)
+      console.log(`[gist usage] ttft=${firstToken}ms in=${gu.input_tokens} cache_read=${gu.cache_read_input_tokens ?? 0} cache_write=${gu.cache_creation_input_tokens ?? 0} out=${gu.output_tokens}`)
       this.events.onDone(id, 'gist')
     } catch (err) {
       if (!signal.aborted) this.events.onError(describe(err))
@@ -120,6 +131,10 @@ export class Brain {
     signal: AbortSignal
   ): Promise<void> {
     this.events.onStart(id, 'full', question, Boolean(screenshot))
+    const began = Date.now()
+    let firstToken = 0
+
+    this.seedBriefing()
 
     const text = `New speech since your last answer:\n${delta}\n\nAnswer this: ${question}`
     const content: UserContent = screenshot
@@ -154,6 +169,7 @@ export class Brain {
 
       for await (const ev of stream) {
         if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+          firstToken ||= Date.now() - began
           answer += ev.delta.text
           this.events.onDelta(id, 'full', ev.delta.text)
         }
@@ -167,7 +183,7 @@ export class Brain {
       // the prefix and the call is costing ~10x what it should.
       const u = final.usage
       console.log(
-        `[brain] in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens}`
+        `[brain] ttft=${firstToken}ms in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens}`
       )
 
       this.history.push({ role: 'assistant', content: answer || '(no answer)' })
@@ -182,6 +198,54 @@ export class Brain {
       this.history.pop()
       this.events.onError(describe(err))
     }
+  }
+
+  /**
+   * Put any briefing PDFs at the very front of the conversation, once.
+   *
+   * Documents are only valid in user turns, so they cannot go in the system
+   * prompt with the rest of the brief. Seeding them as turn one puts them
+   * inside the append-only cached prefix: paid for on the first question,
+   * replayed at cache rates for every question after it.
+   */
+  private seedBriefing(): void {
+    if (this.history.length) return
+    this.history.push(...this.briefingTurns())
+  }
+
+  /**
+   * The briefing PDFs as a user/assistant pair, identical on every call so both
+   * tiers share the same byte-stable prefix and both get cache hits.
+   */
+  private briefingTurns(): Anthropic.MessageParam[] {
+    const pdfs = briefingPdfs()
+    if (!pdfs.length) return []
+
+    return [
+      {
+        role: 'user',
+        content: [
+          ...pdfs.map(
+            (pdf): Anthropic.DocumentBlockParam => ({
+              type: 'document',
+              title: pdf.name,
+              source: { type: 'base64', media_type: 'application/pdf', data: pdf.data }
+            })
+          ),
+          {
+            type: 'text',
+            text: 'These are my briefing documents for the call that is starting. Read them and hold on to the specifics — names, figures, dates. Reply with just "Ready."'
+          }
+        ]
+      },
+      {
+        role: 'assistant',
+        // Breakpoint on the far side of the documents. Everything before this
+        // is identical on every request, so both tiers replay the PDFs at cache
+        // rates instead of re-uploading them each question.
+        content: [{ type: 'text', text: 'Ready.', cache_control: { type: 'ephemeral' } }]
+      }
+    ]
   }
 
   reset(): void {

@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, screen } from 'electron'
 import { join } from 'node:path'
 import { CH, type AnswerTier, type Status } from '@shared/ipc'
-import { HOTKEYS, meetingContext, missingKeys } from './config'
+import { briefingPdfs, HOTKEYS, meetingContext, missingKeys } from './config'
 import { Transcript } from './transcript'
 import { Stt } from './stt'
 import { Brain } from './brain'
@@ -86,6 +86,7 @@ function startServices(): void {
   // Warm the briefing now: it is disk I/O, and the first question is the worst
   // possible moment to discover the context folder is unreadable.
   meetingContext()
+  briefingPdfs()
 
   stt = new Stt({
     onOpen: () => setStatus({ kind: 'listening' }),

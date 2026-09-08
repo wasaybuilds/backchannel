@@ -38,6 +38,50 @@ const READABLE = ['.md', '.txt', '.json', '.csv', '.ts', '.js', '.py', '.sql', '
  * prompt cache, so replays cost ~10% of input price — being thorough here is
  * the cheapest quality win available. Restart to pick up changes.
  */
+export interface BriefingPdf {
+  name: string
+  /** base64, ready for a Claude document content block. */
+  data: string
+}
+
+let pdfCache: BriefingPdf[] | null = null
+
+/**
+ * PDFs from the same `context/` folder — CVs and job descriptions usually
+ * arrive as PDFs and converting them by hand loses the layout Claude can read.
+ *
+ * These cannot ride in the system prompt (documents are only valid in user
+ * turns), so `Brain` seeds them into the first conversation turn where they sit
+ * inside the cached prefix for the rest of the call.
+ */
+export function briefingPdfs(): BriefingPdf[] {
+  if (pdfCache !== null) return pdfCache
+
+  const found: BriefingPdf[] = []
+  for (const root of [process.cwd(), app.getPath('userData')]) {
+    const dir = join(root, 'context')
+    if (!existsSync(dir) || !statSync(dir).isDirectory()) continue
+
+    for (const name of readdirSync(dir).sort()) {
+      if (extname(name).toLowerCase() !== '.pdf') continue
+      const file = join(dir, name)
+      const size = statSync(file).size
+      // The whole request must stay under 32MB, and these replay every turn.
+      if (size > MAX_PDF_BYTES) {
+        console.log(`[context] skipping ${name} — ${(size / 1e6).toFixed(1)}MB exceeds the ${MAX_PDF_BYTES / 1e6}MB limit`)
+        continue
+      }
+      found.push({ name, data: readFileSync(file).toString('base64') })
+    }
+  }
+
+  if (found.length) console.log(`[context] loaded ${found.length} PDF(s): ${found.map((f) => f.name).join(', ')}`)
+  pdfCache = found
+  return pdfCache
+}
+
+const MAX_PDF_BYTES = 8_000_000
+
 let contextCache: string | null = null
 
 export function meetingContext(): string {

@@ -33,16 +33,26 @@ merged into a single stereo stream — left is you, right is them. Deepgram's
 `multichannel` mode returns a `channel_index`, which gives speaker attribution
 for free. One connection, one bill.
 
-**Two model tiers race.** Haiku 4.5 puts a headline on screen in under a
-second while Opus 5 is still thinking. By the time you've drawn breath, the
-real answer is streaming in underneath. Opus runs at `effort: "low"` — this is
-a conversation, not an essay.
+**Two model tiers race.** Haiku 4.5 puts a sentence on screen while Opus 5 is
+still thinking. Measured on a real call: **first words at ~1.3s, the considered
+answer at ~2.1s.** Opus runs at `effort: "low"` — this is a conversation, not an
+essay. Both tiers get the same briefing; a fast answer that says "I don't have
+context" is worse than no fast answer at all.
 
-**The prompt cache does the heavy lifting.** The persona and your `context.md`
-are byte-stable and cached, and the conversation is append-only, so each new
-question replays the whole call at ~10% of input price. The main process logs
-`cache_read` per turn — if it stays at zero, something is invalidating the
-prefix.
+**It writes speech, not notes.** The output is the sentences you say, in first
+person, no markdown — "Yeah, the one that sticks out is our checkout latency..."
+rather than a bulleted report you can't read aloud. It is also told, firmly,
+that every specific must come from your brief or the transcript: invented
+detail is the failure mode here, because you'd read it out as fact.
+
+**The prompt cache does the heavy lifting.** The persona, your briefing and the
+conversation so far are all byte-stable, so each new question replays the lot at
+~10% of input price. Note the breakpoints are placed by hand, not left to
+top-level `cache_control`: the fast tier keeps no history, so its last block is
+the ever-changing transcript, and auto-caching that rewrites the cache every
+call and never reads one. That bug cost ~12x on the fast tier before it was
+caught. Both tiers log `cache_read` per turn — if it stays at zero, something is
+invalidating the prefix.
 
 **Screenshots are on-demand only.** A frame is ~1.1k tokens. Streaming them
 continuously would wreck both latency and cost, so the screen is captured only
@@ -77,19 +87,24 @@ Drop anything the model should know into a `context/` folder next to the app:
 
 ```
 context/
-├── my-cv.md
+├── my-cv.pdf
 ├── job-description.txt
 ├── their-company-notes.md
 └── pricing.csv
 ```
 
-`.md .txt .json .csv .ts .js .py .sql .yaml .yml` are all read at launch, in
-filename order, and pinned in the prompt cache — so replays cost about 10% of
-normal input price and **being thorough here is nearly free**. Put in the
-numbers you always fumble: dates, figures, names, the thing you did in Q2.
+**PDFs work** — drop your CV in as-is, no conversion. Claude reads them
+natively, layout and all. Text formats (`.md .txt .json .csv .ts .js .py .sql
+.yaml .yml`) are read too, in filename order.
+
+All of it is pinned in the prompt cache, so **being thorough here is nearly
+free**. Measured on a real 2-page CV: paid for once at ~5.5k tokens, then
+replayed from cache on every question after. Put in the numbers you always
+fumble — dates, figures, headcounts, the thing you shipped in Q2.
 
 Read once at startup, so restart the app after editing. `context/` is
-gitignored — your notes stay local.
+gitignored: your CV and deal notes never leave the machine except to the two
+APIs.
 
 ---
 
@@ -115,6 +130,7 @@ Per hour of call, roughly:
 |---|---|
 | Deepgram nova-3 streaming | ~$0.45 |
 | Claude (Haiku gist + Opus 5, cached) | ~$0.30 – $2.00 |
+| Same, with caching broken | ~10x the Claude line |
 
 The Claude range depends on how often it fires. Prompt caching is what keeps
 it in that band instead of ten times higher.
@@ -155,9 +171,10 @@ src/
 │   ├── index.ts       window, content protection, hotkeys, IPC
 │   ├── stt.ts         Deepgram socket, reconnect, keepalive
 │   ├── brain.ts       Claude two-tier, prompt cache, history
-│   ├── transcript.ts  rolling buffer + question detection
+│   ├── transcript.ts  rolling buffer, question detection, echo removal
 │   ├── capture.ts     screenshot
-│   └── config.ts      env + context.md
+│   └── config.ts      env + context/ loader (text and PDF)
+├── test/          npm test — question detection and echo, no API calls
 ├── preload/       the only bridge between the two
 ├── renderer/      Chromium side — capture and UI, never sees a key
 │   ├── audio.ts             mic + loopback -> stereo
