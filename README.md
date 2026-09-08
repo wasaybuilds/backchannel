@@ -63,8 +63,33 @@ cp context.md.example context.md        # who you are, who you're talking to
 npm run dev
 ```
 
+If `npm run dev` exits instantly with `Cannot read properties of undefined
+(reading 'whenReady')`, your shell has `ELECTRON_RUN_AS_NODE=1` set (VS Code
+and some IDE terminals do this). Launch from a plain terminal, or
+`env -u ELECTRON_RUN_AS_NODE npm run dev`.
+
 Get keys from [console.deepgram.com](https://console.deepgram.com) and
 [console.anthropic.com](https://console.anthropic.com).
+
+### Briefing it before a call
+
+Drop anything the model should know into a `context/` folder next to the app:
+
+```
+context/
+├── my-cv.md
+├── job-description.txt
+├── their-company-notes.md
+└── pricing.csv
+```
+
+`.md .txt .json .csv .ts .js .py .sql .yaml .yml` are all read at launch, in
+filename order, and pinned in the prompt cache — so replays cost about 10% of
+normal input price and **being thorough here is nearly free**. Put in the
+numbers you always fumble: dates, figures, names, the thing you did in Q2.
+
+Read once at startup, so restart the app after editing. `context/` is
+gitignored — your notes stay local.
 
 ---
 

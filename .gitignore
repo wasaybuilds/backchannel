@@ -7,3 +7,5 @@ dist/
 .DS_Store
 Thumbs.db
 context.md
+context/
+!context/.gitkeep

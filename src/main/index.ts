@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, screen } from 'electron'
 import { join } from 'node:path'
 import { CH, type AnswerTier, type Status } from '@shared/ipc'
-import { HOTKEYS } from './config'
+import { HOTKEYS, meetingContext, missingKeys } from './config'
 import { Transcript } from './transcript'
 import { Stt } from './stt'
 import { Brain } from './brain'
@@ -54,6 +54,12 @@ function createWindow(): void {
 
   win.once('ready-to-show', () => win?.showInactive())
 
+  // Renderer runs in Chromium with no visible devtools on an overlay window;
+  // forward its console so audio-capture failures are diagnosable.
+  win.webContents.on('console-message', (e) => {
+    console.log(`[renderer:${e.level}] ${e.message}`)
+  })
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -77,6 +83,10 @@ function wireLoopbackAudio(): void {
 }
 
 function startServices(): void {
+  // Warm the briefing now: it is disk I/O, and the first question is the worst
+  // possible moment to discover the context folder is unreadable.
+  meetingContext()
+
   stt = new Stt({
     onOpen: () => setStatus({ kind: 'listening' }),
     onError: (message) => setStatus({ kind: 'error', message }),
@@ -135,17 +145,30 @@ function registerHotkeys(): void {
 }
 
 app.whenReady().then(() => {
+  const missing = missingKeys()
+
   wireLoopbackAudio()
-  startServices()
+  if (!missing.length) startServices()
   createWindow()
   registerHotkeys()
+
+  if (missing.length) {
+    // Report it on the panel rather than dying on first use.
+    win?.webContents.once('did-finish-load', () =>
+      setStatus({ kind: 'error', message: `set ${missing.join(' and ')} in .env` })
+    )
+  }
 
   ipcMain.on(CH.audioState, (_e, payload: { active: boolean; sampleRate: number }) => {
     if (payload.active) stt?.start(payload.sampleRate)
     else stt?.stop()
   })
 
-  ipcMain.on(CH.audioChunk, (_e, chunk: ArrayBuffer) => stt?.send(chunk))
+  let chunks = 0
+  ipcMain.on(CH.audioChunk, (_e, chunk: ArrayBuffer) => {
+    if (chunks++ === 0) console.log(`[audio] capture live, first chunk ${chunk.byteLength} bytes`)
+    stt?.send(chunk)
+  })
 
   ipcMain.on(CH.ask, (_e, question: string) => void ask(question))
 
