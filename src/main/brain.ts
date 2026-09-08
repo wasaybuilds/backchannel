@@ -13,14 +13,32 @@ You are fed a rolling transcript. "THEM" is the other participant. "ME" is the u
 
 You are writing WORDS THE USER WILL READ ALOUD, seconds from now, while someone waits. Not notes. Not a summary. The actual sentences out of their mouth.
 
-Because of that:
-- Write in the user's own voice — first person, spoken English, contractions. "Yeah, the messiest one was..." not "The most complex migration involved...".
-- It has to survive being read cold off a screen. Short sentences. One idea each. Nothing the user would stumble over.
-- NO markdown. No **bold**, no headers, no bullet characters, no arrows like ->. Those get read out loud by mistake and they look ridiculous. Plain sentences only.
-- Say "eight hundred and twenty milliseconds down to a hundred and ninety" style only if it is natural; writing "820ms to 190ms" is fine, the user can say it. Never write "p95 820ms → 190ms" — that is not language.
-- Open with the sentence they should say first. No preamble, no "Great question", no restating what was asked.
+The single most important rule: NOTHING you write may reveal that the user is reading. If a sentence would sound like someone reciting a document, rewrite it.
+
+Two things give it away instantly, so never do them:
+
+1. Never name or restate the question. No "Task two is...", no "The problem asks...", no "So the question is about...". A person recalling their own work just starts talking about the work. Not "Task two is four digits arranged as HH:MM and I count valid times" — instead "Oh that one's the clock puzzle. You've got four digits and you're finding how many real times you can make out of them."
+
+2. Never read notation, symbols or formatting out loud. Convert every one of them into how a human actually says it:
+   - "HH:MM" -> "hours and minutes", or just "a time"
+   - "O(n log n)" -> "n log n" said plainly, or "it sorts, so n log n"
+   - "O(1)" -> "constant time"
+   - "820ms -> 190ms" -> "820 milliseconds down to 190"
+   - "arr[i]" -> "each element", "the item at that index"
+   - "A4e" -> "A, then four unknowns, then e"
+   - "s.length - 1" -> "the last character"
+   - "null" / "nil" -> "empty", "nothing there"
+   - camelCase and snake_case identifiers -> say the words, not the casing
+   Anything with brackets, colons, underscores, arrows or asterisks in it is a red flag. Say the meaning instead.
+
+The rest of the voice:
+- First person, spoken English, contractions. "Yeah, the messiest one was..." not "The most complex migration involved...".
+- It has to survive being read cold off a screen. Short sentences. One idea each. Nothing the user would stumble over mid-breath.
+- NO markdown at all. No **bold**, no headers, no bullet characters, no arrows.
+- Sound like recall, not recitation. Real speech has a little hedging and shape: "Oh, that one", "the bit that actually mattered was", "nothing exotic". Use it sparingly — it is what makes it sound like a person thinking, not a page being read.
+- Open with the sentence they should say first.
 - Four sentences is usually plenty. If there is a good follow-up they could offer, put it on its own last line starting with "if they push:".
-- Numbers, names and dates are the point — those are what the user cannot recall under pressure. Work them into the sentence naturally.
+- Numbers, names and dates are the point — those are what the user cannot recall under pressure. Work them into the sentence the way a person says a number.
 
 Where facts may come from — this is the rule that matters most:
 - Every specific — figure, date, tool name, table name, headcount, percentage — must appear in the MEETING CONTEXT or in the transcript. Those are the only two sources of truth.
@@ -208,6 +226,55 @@ export class Brain {
    * inside the append-only cached prefix: paid for on the first question,
    * replayed at cache rates for every question after it.
    */
+  /**
+   * Write both tiers' cache entries before the call starts.
+   *
+   * A large briefing costs seconds on the first question — measured at 4.6s
+   * with a 63KB guide, against 2.7s once warm — and the first question of a
+   * call is the worst possible moment to be slow. This pays that cost at launch
+   * while nobody is waiting. Requests are shaped exactly like the real ones up
+   * to the cache breakpoint, or they would write a prefix nothing later reads.
+   */
+  async prewarm(): Promise<void> {
+    const briefing = this.briefingTurns()
+    if (!briefing.length) return
+
+    const began = Date.now()
+    const probe: Anthropic.MessageParam = { role: 'user', content: 'Ready?' }
+
+    const results = await Promise.allSettled([
+      this.client.messages.create({
+        model: GIST_MODEL,
+        max_tokens: 1,
+        system: [
+          { type: 'text', text: GIST_PERSONA },
+          {
+            type: 'text',
+            text: `MEETING CONTEXT\n${meetingContext()}`,
+            cache_control: { type: 'ephemeral' }
+          }
+        ],
+        messages: [...briefing, probe]
+      }),
+      this.client.messages.create({
+        model: FULL_MODEL,
+        max_tokens: 1,
+        output_config: { effort: 'low' },
+        system: [
+          { type: 'text', text: PERSONA },
+          { type: 'text', text: `MEETING CONTEXT\n${meetingContext()}` }
+        ],
+        messages: [...briefing, probe]
+      })
+    ])
+
+    const failed = results.filter((r) => r.status === 'rejected').length
+    console.log(
+      `[prewarm] ${results.length - failed}/${results.length} tiers warmed in ${Date.now() - began}ms` +
+        (failed ? ' — a cold tier just means a slower first answer' : '')
+    )
+  }
+
   private seedBriefing(): void {
     if (this.history.length) return
     this.history.push(...this.briefingTurns())

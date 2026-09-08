@@ -1,7 +1,7 @@
 import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, screen } from 'electron'
 import { join } from 'node:path'
 import { CH, type AnswerTier, type Status } from '@shared/ipc'
-import { briefingPdfs, HOTKEYS, meetingContext, missingKeys } from './config'
+import { briefingPdfs, HOTKEY_ENV, HOTKEYS, meetingContext, missingKeys } from './config'
 import { Transcript } from './transcript'
 import { Stt } from './stt'
 import { Brain } from './brain'
@@ -121,6 +121,9 @@ function startServices(): void {
     },
     onError: (message) => setStatus({ kind: 'error', message })
   })
+
+  // Pay the briefing's upload cost now, while nobody is waiting on an answer.
+  void brain.prewarm()
 }
 
 async function ask(question: string, withScreen = false): Promise<void> {
@@ -142,19 +145,40 @@ function registerHotkeys(): void {
     void ask(q || "What's on my screen, and what should I say about it?", true)
   })
 
-  globalShortcut.register(HOTKEYS.toggleVisible, () => {
-    if (!win) return
-    if (win.isVisible()) win.hide()
-    else win.showInactive()
-  })
+  // Separate hide and show rather than one toggle: when you need it gone you
+  // are usually not sure whether it is currently up, and a toggle guesses wrong
+  // exactly when it matters.
+  globalShortcut.register(HOTKEYS.hide, () => win?.hide())
+  globalShortcut.register(HOTKEYS.show, () => win?.showInactive())
 
   globalShortcut.register(HOTKEYS.toggleClickThrough, () => {
     clickThrough = !clickThrough
+    // Content protection is untouched here — the panel stays out of screen
+    // shares whether or not your mouse can reach it. This only decides where
+    // clicks land: on the panel, or on the app behind it.
     win?.setIgnoreMouseEvents(clickThrough, { forward: true })
     win?.setFocusable(!clickThrough)
     send(CH.visibility, { clickThrough })
   })
+
+  for (const [name, accel] of Object.entries(HOTKEYS)) {
+    if (globalShortcut.isRegistered(accel)) continue
+    const envVar = HOTKEY_ENV[name as keyof typeof HOTKEYS]
+    console.log(`[hotkey] ${accel} was refused — another app already owns it. Set ${envVar} in .env to pick a different key.`)
+  }
 }
+
+// Only one copy may run. A second instance cannot take the global shortcuts
+// the first one holds, so it comes up mute and makes the original look broken —
+// which is exactly the confusing failure this avoids.
+if (!app.requestSingleInstanceLock()) {
+  console.log('[app] another Backchannel is already running — exiting.')
+  app.quit()
+}
+
+app.on('second-instance', () => {
+  win?.showInactive()
+})
 
 app.whenReady().then(() => {
   const missing = missingKeys()

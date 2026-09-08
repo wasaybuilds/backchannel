@@ -122,9 +122,28 @@ function section(name: string, body: string): string {
 ${body.trim()}`
 }
 
+/**
+ * Global shortcuts. Override any of them in .env.
+ *
+ * A word on modifiers: these are registered system-wide, so a bare `Shift+H`
+ * swallows every capital H you type anywhere on the machine — in Zoom chat, in
+ * your editor, everywhere. Alt is the lightest modifier that does not collide
+ * with ordinary typing, which is why these default to Alt rather than Shift.
+ * Electron accepts Alt / Control / Shift / Super / CommandOrControl.
+ */
 export const HOTKEYS = {
-  answerNow: 'CommandOrControl+Shift+Space',
-  answerScreen: 'CommandOrControl+Shift+S',
-  toggleVisible: 'CommandOrControl+Shift+H',
-  toggleClickThrough: 'CommandOrControl+Shift+C'
+  hide: process.env.HOTKEY_HIDE || 'Alt+H',
+  show: process.env.HOTKEY_SHOW || 'Alt+S',
+  answerNow: process.env.HOTKEY_ANSWER || 'Alt+Space',
+  answerScreen: process.env.HOTKEY_SCREEN || 'Alt+D',
+  toggleClickThrough: process.env.HOTKEY_CLICK || 'Alt+C'
 } as const
+
+/** Which variable to edit when a shortcut is refused. */
+export const HOTKEY_ENV: Record<keyof typeof HOTKEYS, string> = {
+  hide: 'HOTKEY_HIDE',
+  show: 'HOTKEY_SHOW',
+  answerNow: 'HOTKEY_ANSWER',
+  answerScreen: 'HOTKEY_SCREEN',
+  toggleClickThrough: 'HOTKEY_CLICK'
+}
