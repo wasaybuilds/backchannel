@@ -13,7 +13,7 @@ const statusEl = $('status')
 const dotEl = $('dot')
 
 /** One card per question; the gist and full tiers write into the same card. */
-const cards = new Map<string, { gist: HTMLElement; full: HTMLElement }>()
+const cards = new Map<string, { gist: HTMLElement; full: HTMLElement; code: HTMLElement }>()
 
 window.bc.onStatus((s: Status) => {
   dotEl.className = s.kind
@@ -26,12 +26,14 @@ window.bc.onAnswerStart((a: AnswerStart) => {
   if (!card) {
     const el = document.createElement('div')
     el.className = a.withScreenshot ? 'answer shot' : 'answer'
-    el.innerHTML = '<div class="q"></div><div class="gist"></div><div class="full"></div>'
+    el.innerHTML =
+      '<div class="q"></div><div class="gist"></div><div class="full"></div><pre class="code"></pre>'
     el.querySelector<HTMLElement>('.q')!.textContent = a.question
     answersEl.append(el)
     card = {
       gist: el.querySelector<HTMLElement>('.gist')!,
-      full: el.querySelector<HTMLElement>('.full')!
+      full: el.querySelector<HTMLElement>('.full')!,
+      code: el.querySelector<HTMLElement>('.code')!
     }
     cards.set(a.id, card)
     // Keep only the last few cards — this is a glance surface, not a log.
@@ -43,7 +45,7 @@ window.bc.onAnswerStart((a: AnswerStart) => {
 window.bc.onAnswerDelta((d: AnswerDelta) => {
   const card = cards.get(d.id)
   if (!card || d.done) return
-  const target = d.tier === 'gist' ? card.gist : card.full
+  const target = d.tier === 'gist' ? card.gist : d.tier === 'code' ? card.code : card.full
   target.textContent += d.text
   // Once the considered answer arrives, the fast one has served its purpose.
   if (d.tier === 'full' && card.gist.textContent) card.gist.style.opacity = '0.55'

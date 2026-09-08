@@ -15,8 +15,11 @@ export interface TranscriptTurn {
   at: number
 }
 
-/** A single answer as it streams in. Two tiers race: `gist` lands first. */
-export type AnswerTier = 'gist' | 'full'
+/**
+ * A single answer as it streams in. `gist` and `full` race on spoken answers;
+ * `code` is its own mode — pasteable code from the clipboard, never spoken.
+ */
+export type AnswerTier = 'gist' | 'full' | 'code'
 
 export interface AnswerDelta {
   id: string

@@ -91,3 +91,15 @@ body {
 
 ::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 3px; }
+
+/* Clipboard answers are pasted, not read aloud — so they get real code
+   formatting and their own scroll rather than wrapping into prose. */
+.answer .code {
+  margin: 0;
+  font: 11.5px/1.5 "Cascadia Code", Consolas, "SF Mono", monospace;
+  white-space: pre;
+  overflow-x: auto;
+  user-select: text;
+  tab-size: 2;
+}
+.answer .code:empty { display: none; }

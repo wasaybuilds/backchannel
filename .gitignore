@@ -10,3 +10,4 @@ context.md
 context/
 !context/.gitkeep
 bc-run.log
+bc-code.log

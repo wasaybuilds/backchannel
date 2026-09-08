@@ -159,14 +159,16 @@ CV and deal notes never leave the machine except to the two APIs.
 | `Alt+D` | Screenshot my screen, then answer about it |
 | `Alt+H` | Hide the panel |
 | `Alt+S` | Show it again |
+| `Alt+V` | Solve whatever I just copied — returns code |
 | `Alt+C` | Toggle click-through |
+| `Alt+Q` | Quit |
 
 It also fires on its own whenever the other person finishes something that reads
 like a question — including "So walk me through…" and "Okay, and how big was the
 team.", which do not open on an interrogative or end in a question mark.
 
 Override any key with `HOTKEY_HIDE`, `HOTKEY_SHOW`, `HOTKEY_ANSWER`,
-`HOTKEY_SCREEN`, `HOTKEY_CLICK` in `.env`.
+`HOTKEY_SCREEN`, `HOTKEY_CODE`, `HOTKEY_CLICK`, `HOTKEY_QUIT` in `.env`.
 
 **Why Alt and not Shift.** These register system-wide. A bare `Shift+H` would
 swallow every capital H you type — in Zoom chat, in your editor, everywhere —
@@ -182,6 +184,45 @@ behind. Click-through is on by default so you never steal focus from the call.
 **One instance only.** A second copy cannot take global shortcuts the first one
 already holds, so it would come up mute and make the original look broken.
 Launching again just re-shows the running panel.
+
+**`Alt+Q` is the only way out.** The window is frameless and hidden from the
+taskbar by design, so there is no close button and nothing to alt-tab to. If you
+ever lose the hotkey, end `electron.exe` in Task Manager.
+
+### Coding rounds
+
+If they put you in an editor, copy the problem or the broken function and press
+`Alt+V`. The clipboard beats the screenshot here — Claude gets exact text rather
+than pixels, and you get code you can paste back.
+
+Coding mode is deliberately the inverse of the spoken persona. You get one line
+to say while you start typing, then a real fenced code block, then the follow-up
+an interviewer will probe:
+
+> *"Yeah, that nested scan is O(n²) — I'd keep a map of value to index so it's
+> one pass."*
+>
+> ```python
+> def two_sum(nums, target):
+>     if not nums or len(nums) < 2:
+>         return None
+>     seen = {}  # value -> index of first occurrence
+>     for i, num in enumerate(nums):
+>         complement = target - num
+>         if complement in seen:
+>             return [seen[complement], i]
+>         seen[num] = i
+>     return None
+> ```
+>
+> *note: O(n) time, O(n) extra space. Checking the complement before inserting
+> is what stops an element pairing with itself.*
+
+It matches the language, naming and indentation of what you pasted, adds the
+edge-case guards an interviewer asks about first, and stays out of the spoken
+conversation history — a pasted 200-line file would otherwise distort every
+answer for the rest of the call. Clipboard input is capped at 24k characters so
+a stray Ctrl+A does not send your whole file.
 
 ---
 

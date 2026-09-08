@@ -136,7 +136,12 @@ export const HOTKEYS = {
   show: process.env.HOTKEY_SHOW || 'Alt+S',
   answerNow: process.env.HOTKEY_ANSWER || 'Alt+Space',
   answerScreen: process.env.HOTKEY_SCREEN || 'Alt+D',
-  toggleClickThrough: process.env.HOTKEY_CLICK || 'Alt+C'
+  toggleClickThrough: process.env.HOTKEY_CLICK || 'Alt+C',
+  // Copy code in your editor, press this, get working code back.
+  solveClipboard: process.env.HOTKEY_CODE || 'Alt+V',
+  // The window is frameless and hidden from the taskbar, so without this the
+  // only way out is Task Manager.
+  quit: process.env.HOTKEY_QUIT || 'Alt+Q'
 } as const
 
 /** Which variable to edit when a shortcut is refused. */
@@ -145,5 +150,7 @@ export const HOTKEY_ENV: Record<keyof typeof HOTKEYS, string> = {
   show: 'HOTKEY_SHOW',
   answerNow: 'HOTKEY_ANSWER',
   answerScreen: 'HOTKEY_SCREEN',
-  toggleClickThrough: 'HOTKEY_CLICK'
+  toggleClickThrough: 'HOTKEY_CLICK',
+  solveClipboard: 'HOTKEY_CODE',
+  quit: 'HOTKEY_QUIT'
 }

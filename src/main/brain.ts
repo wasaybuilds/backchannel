@@ -23,13 +23,15 @@ Two things give it away instantly, so never do them:
    - "HH:MM" -> "hours and minutes", or just "a time"
    - "O(n log n)" -> "n log n" said plainly, or "it sorts, so n log n"
    - "O(1)" -> "constant time"
-   - "820ms -> 190ms" -> "820 milliseconds down to 190"
+   - "820ms -> 190ms" -> "820ms down to 190"
    - "arr[i]" -> "each element", "the item at that index"
-   - "A4e" -> "A, then four unknowns, then e"
+   - "A4e" -> "A, then 4 unknowns, then e"
    - "s.length - 1" -> "the last character"
    - "null" / "nil" -> "empty", "nothing there"
    - camelCase and snake_case identifiers -> say the words, not the casing
    Anything with brackets, colons, underscores, arrows or asterisks in it is a red flag. Say the meaning instead.
+
+   But notation is not the same as a number. WRITE NUMBERS AS DIGITS: 24, not "twenty-four". 23, not "twenty-three". 40M rows, 11 minutes, 3 years, 820ms. The user is scanning this mid-sentence with someone watching, and digits register at a glance where spelled-out words do not. Translate the symbols; leave the figures alone.
 
 The rest of the voice:
 - First person, spoken English, contractions. "Yeah, the messiest one was..." not "The most complex migration involved...".
@@ -38,7 +40,7 @@ The rest of the voice:
 - Sound like recall, not recitation. Real speech has a little hedging and shape: "Oh, that one", "the bit that actually mattered was", "nothing exotic". Use it sparingly — it is what makes it sound like a person thinking, not a page being read.
 - Open with the sentence they should say first.
 - Four sentences is usually plenty. If there is a good follow-up they could offer, put it on its own last line starting with "if they push:".
-- Numbers, names and dates are the point — those are what the user cannot recall under pressure. Work them into the sentence the way a person says a number.
+- Numbers, names and dates are the point — those are what the user cannot recall under pressure. Put them in as digits and keep them prominent.
 
 Where facts may come from — this is the rule that matters most:
 - Every specific — figure, date, tool name, table name, headcount, percentage — must appear in the MEETING CONTEXT or in the transcript. Those are the only two sources of truth.
@@ -51,6 +53,30 @@ Where facts may come from — this is the rule that matters most:
 const GIST_PERSONA = `${PERSONA}
 
 You are the FAST tier. A fuller answer is already streaming in behind you, so your only job is to get the user talking. Give them ONE sentence they can start saying immediately — the opening line, in their voice, that buys them the seconds the real answer needs. One sentence. Never apologise for brevity, never say you are being brief.`
+
+/**
+ * Coding mode is deliberately the opposite of the spoken persona: you are going
+ * to paste this, not read it, so it wants a real code block and not prose.
+ */
+const CODE_PERSONA = `You are helping someone who is live in a technical interview or a pairing call, right now, with the interviewer watching their editor.
+
+They have copied something from their editor — a problem statement, a failing test, a half-written function, an error — and it is below. Solve it.
+
+Output exactly this shape and nothing else:
+
+One short line they can say out loud while they start typing. Casual, first person, no markdown. Something like "Yeah, I'd use a hash map here so it's one pass" or "Ah, that's an off-by-one on the last index".
+
+Then a blank line, then the code in a fenced block with the language tag.
+
+Then, only if it is worth saying, one final line starting with "note:" — the complexity, the edge case they should mention, or the thing an interviewer will probe next.
+
+Rules for the code:
+- Complete and runnable. No "// rest of implementation here", no pseudocode.
+- Match the language, style, naming and indentation of what they pasted. If they use camelCase, use camelCase. If it is Python, do not hand back JavaScript.
+- Handle the obvious edge cases — empty input, single element, nulls — because that is the first thing an interviewer asks about.
+- Prefer the clear solution over the clever one. They have to explain this out loud in a moment.
+- Comment only where the reasoning is not obvious from the code. An interviewer reading dense comments knows they were not written under pressure.
+- If what they pasted is broken rather than empty, fix it and say what was wrong in the opening line.`
 
 export interface BrainEvents {
   onStart(id: string, tier: AnswerTier, question: string, withScreenshot: boolean): void
@@ -91,6 +117,70 @@ export class Brain {
       void this.gist(id, question, controller.signal)
     }
     await this.full(id, question, delta, screenshot, controller.signal)
+  }
+
+  /**
+   * Solve whatever they just copied out of their editor.
+   *
+   * Runs on the full model only and skips the gist tier — half a code snippet
+   * arriving first is worse than waiting the extra second for a whole one. Kept
+   * out of the spoken conversation history too, so a pasted 200-line file does
+   * not sit in the prefix distorting every answer for the rest of the call.
+   */
+  async askCode(snippet: string, spokenQuestion: string): Promise<void> {
+    this.inFlight?.abort()
+    const controller = new AbortController()
+    this.inFlight = controller
+
+    const id = `c${++this.seq}`
+    const began = Date.now()
+    let firstToken = 0
+    this.events.onStart(id, 'code', spokenQuestion || 'from clipboard', false)
+
+    try {
+      const stream = this.client.messages.stream(
+        {
+          model: FULL_MODEL,
+          max_tokens: 4000,
+          output_config: { effort: 'medium' },
+          system: [
+            { type: 'text', text: CODE_PERSONA },
+            {
+              type: 'text',
+              text: `MEETING CONTEXT\n${meetingContext()}`,
+              cache_control: { type: 'ephemeral' }
+            }
+          ],
+          messages: [
+            ...this.briefingTurns(),
+            {
+              role: 'user',
+              content:
+                `From my editor:\n\n${snippet}\n\n` +
+                (spokenQuestion
+                  ? `They just asked: ${spokenQuestion}`
+                  : 'Solve it.')
+            }
+          ]
+        },
+        { signal: controller.signal }
+      )
+
+      for await (const ev of stream) {
+        if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+          firstToken ||= Date.now() - began
+          this.events.onDelta(id, 'code', ev.delta.text)
+        }
+      }
+
+      const u = (await stream.finalMessage()).usage
+      console.log(
+        `[code] ttft=${firstToken}ms in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`
+      )
+      this.events.onDone(id, 'code')
+    } catch (err) {
+      if (!controller.signal.aborted) this.events.onError(describe(err))
+    }
   }
 
   private async gist(id: string, question: string, signal: AbortSignal): Promise<void> {

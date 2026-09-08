@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, session, screen } from 'electron'
+import { app, BrowserWindow, clipboard, desktopCapturer, globalShortcut, ipcMain, session, screen } from 'electron'
 import { join } from 'node:path'
 import { CH, type AnswerTier, type Status } from '@shared/ipc'
 import { briefingPdfs, HOTKEY_ENV, HOTKEYS, meetingContext, missingKeys } from './config'
@@ -148,8 +148,30 @@ function registerHotkeys(): void {
   // Separate hide and show rather than one toggle: when you need it gone you
   // are usually not sure whether it is currently up, and a toggle guesses wrong
   // exactly when it matters.
+  globalShortcut.register(HOTKEYS.solveClipboard, async () => {
+    // Electron 44 returns a promise here, unlike older versions.
+    const snippet = (await clipboard.readText()).trim()
+    if (!snippet) {
+      setStatus({ kind: 'error', message: 'clipboard is empty — copy the code first' })
+      return
+    }
+    // Guard the request size rather than the model's context: a stray Ctrl+A in
+    // a big file would otherwise send the whole thing.
+    const clipped = snippet.length > 24_000 ? `${snippet.slice(0, 24_000)}
+...[truncated]` : snippet
+    console.log(`[code] solving ${clipped.length} chars from clipboard`)
+    setStatus({ kind: 'thinking' })
+    void brain?.askCode(clipped, transcript.lastFromThem()).finally(() =>
+      setStatus({ kind: 'listening' })
+    )
+  })
+
   globalShortcut.register(HOTKEYS.hide, () => win?.hide())
   globalShortcut.register(HOTKEYS.show, () => win?.showInactive())
+  globalShortcut.register(HOTKEYS.quit, () => {
+    console.log('[app] quit requested')
+    app.quit()
+  })
 
   globalShortcut.register(HOTKEYS.toggleClickThrough, () => {
     clickThrough = !clickThrough
@@ -171,16 +193,21 @@ function registerHotkeys(): void {
 // Only one copy may run. A second instance cannot take the global shortcuts
 // the first one holds, so it comes up mute and makes the original look broken —
 // which is exactly the confusing failure this avoids.
-if (!app.requestSingleInstanceLock()) {
+const isOnlyInstance = app.requestSingleInstanceLock()
+
+if (!isOnlyInstance) {
+  // app.quit() is asynchronous — startup would carry on and fail to take the
+  // shortcuts the first instance already holds, logging five confusing
+  // refusals on the way out. exit() stops here.
   console.log('[app] another Backchannel is already running — exiting.')
-  app.quit()
+  app.exit(0)
 }
 
 app.on('second-instance', () => {
   win?.showInactive()
 })
 
-app.whenReady().then(() => {
+if (isOnlyInstance) app.whenReady().then(() => {
   const missing = missingKeys()
 
   wireLoopbackAudio()
