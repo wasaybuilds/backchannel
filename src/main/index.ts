@@ -8,7 +8,23 @@ import { Brain } from './brain'
 import { screenshot } from './capture'
 
 let win: BrowserWindow | null = null
-let clickThrough = true
+/** User pressed the hotkey to make the panel permanently inert. */
+let pinnedThrough = false
+
+/**
+ * Clicks and the scroll wheel reach the panel only while the pointer is over
+ * it. The rest of the time they pass through to the call behind.
+ *
+ * This is what makes the panel scrollable at all: `setIgnoreMouseEvents` sends
+ * the wheel to whatever is underneath, so without hover handling you physically
+ * cannot scroll back to an earlier answer. `forward: true` keeps delivering
+ * mousemove to the renderer while ignoring is on, which is how it notices the
+ * pointer arriving.
+ */
+function applyMouse(hovering: boolean): void {
+  const ignore = pinnedThrough || !hovering
+  win?.setIgnoreMouseEvents(ignore, { forward: true })
+}
 const transcript = new Transcript()
 let stt: Stt | null = null
 let brain: Brain | null = null
@@ -50,7 +66,7 @@ function createWindow(): void {
   win.setContentProtection(true)
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  win.setIgnoreMouseEvents(clickThrough, { forward: true })
+  applyMouse(false)
 
   win.once('ready-to-show', () => win?.showInactive())
 
@@ -174,13 +190,12 @@ function registerHotkeys(): void {
   })
 
   globalShortcut.register(HOTKEYS.toggleClickThrough, () => {
-    clickThrough = !clickThrough
-    // Content protection is untouched here — the panel stays out of screen
-    // shares whether or not your mouse can reach it. This only decides where
-    // clicks land: on the panel, or on the app behind it.
-    win?.setIgnoreMouseEvents(clickThrough, { forward: true })
-    win?.setFocusable(!clickThrough)
-    send(CH.visibility, { clickThrough })
+    // Pinning click-through off entirely, for when you want the panel to be
+    // completely inert over a shared window. Content protection is untouched
+    // either way — this only decides where clicks land.
+    pinnedThrough = !pinnedThrough
+    applyMouse(false)
+    send(CH.visibility, { clickThrough: pinnedThrough })
   })
 
   for (const [name, accel] of Object.entries(HOTKEYS)) {
@@ -234,6 +249,8 @@ if (isOnlyInstance) app.whenReady().then(() => {
   })
 
   ipcMain.on(CH.ask, (_e, question: string) => void ask(question))
+
+  ipcMain.on(CH.interactive, (_e, hovering: boolean) => applyMouse(hovering))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

@@ -176,10 +176,19 @@ and hide the panel instead. Alt is the lightest modifier that does not collide
 with typing. If another app already owns a shortcut, startup logs which one was
 refused rather than failing silently.
 
+**Scrolling and clicking.** Move the pointer over the panel and it becomes
+interactive — wheel, selection, click. Move away and everything falls through to
+the call behind, so it never intercepts a click you meant for Zoom. `Alt+C` pins
+it fully inert if you want that guarantee.
+
+Answers only auto-scroll while you are already at the bottom. Scroll up to
+re-read an earlier answer and streaming text will not drag you back down
+mid-sentence.
+
 **Clicking it never reveals it.** Content protection and mouse handling are
-independent. The panel is excluded from capture whether or not you can click it.
-`Alt+C` only decides where clicks land — on the panel, or through it onto Zoom
-behind. Click-through is on by default so you never steal focus from the call.
+independent — the panel is excluded from capture whether or not you can click
+it. Hovering, scrolling and selecting text change nothing about what the other
+person sees.
 
 **One instance only.** A second copy cannot take global shortcuts the first one
 already holds, so it would come up mute and make the original look broken.

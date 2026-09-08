@@ -55,5 +55,7 @@ export const CH = {
   /** main -> renderer: toggle the panel from a global hotkey. */
   visibility: 'ui:visibility',
   /** renderer -> main: user typed a question into the panel. */
-  ask: 'ask'
+  ask: 'ask',
+  /** renderer -> main: pointer entered/left the panel, so the wheel can reach it. */
+  interactive: 'ui:interactive'
 } as const

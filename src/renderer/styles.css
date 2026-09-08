@@ -89,8 +89,22 @@ body {
 #feed .them { color: #b9bdc6; }
 #feed .interim { opacity: 0.45; font-style: italic; }
 
-::-webkit-scrollbar { width: 5px; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 3px; }
+/* Wide enough to actually grab. The panel is only reachable while the pointer
+   is over it, so a 5px target was a fiddle. */
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.3); }
+
+/* Answers are the thing you scroll back through, so give them momentum and
+   stop a long code block dragging the whole panel sideways. */
+#answers { overscroll-behavior: contain; scrollbar-gutter: stable; }
+#feed { overscroll-behavior: contain; }
 
 /* Clipboard answers are pasted, not read aloud — so they get real code
    formatting and their own scroll rather than wrapping into prose. */

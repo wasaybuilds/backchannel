@@ -12,6 +12,22 @@ const feedEl = $('feed')
 const statusEl = $('status')
 const dotEl = $('dot')
 
+/**
+ * Stick to the newest answer only while the reader is already at the bottom.
+ *
+ * Forcing scrollTop on every streaming token means you can never read back to
+ * an earlier answer — the next token yanks you down again, mid-sentence.
+ */
+const NEAR_BOTTOM_PX = 48
+
+function atBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM_PX
+}
+
+function keepPinned(el: HTMLElement, wasAtBottom: boolean): void {
+  if (wasAtBottom) el.scrollTop = el.scrollHeight
+}
+
 /** One card per question; the gist and full tiers write into the same card. */
 const cards = new Map<string, { gist: HTMLElement; full: HTMLElement; code: HTMLElement }>()
 
@@ -22,6 +38,7 @@ window.bc.onStatus((s: Status) => {
 })
 
 window.bc.onAnswerStart((a: AnswerStart) => {
+  const wasAtBottom = atBottom(answersEl)
   let card = cards.get(a.id)
   if (!card) {
     const el = document.createElement('div')
@@ -39,20 +56,23 @@ window.bc.onAnswerStart((a: AnswerStart) => {
     // Keep only the last few cards — this is a glance surface, not a log.
     while (answersEl.children.length > 6) answersEl.firstElementChild?.remove()
   }
-  answersEl.scrollTop = answersEl.scrollHeight
+  // A brand new question is worth jumping to even if they had scrolled up.
+  keepPinned(answersEl, wasAtBottom || a.tier !== 'full')
 })
 
 window.bc.onAnswerDelta((d: AnswerDelta) => {
   const card = cards.get(d.id)
   if (!card || d.done) return
+  const wasAtBottom = atBottom(answersEl)
   const target = d.tier === 'gist' ? card.gist : d.tier === 'code' ? card.code : card.full
   target.textContent += d.text
   // Once the considered answer arrives, the fast one has served its purpose.
   if (d.tier === 'full' && card.gist.textContent) card.gist.style.opacity = '0.55'
-  answersEl.scrollTop = answersEl.scrollHeight
+  keepPinned(answersEl, wasAtBottom)
 })
 
 window.bc.onTranscript((t: TranscriptTurn) => {
+  const wasAtBottom = atBottom(feedEl)
   const id = `t-${t.id}`
   let row = document.getElementById(id)
   if (!row) {
@@ -63,8 +83,28 @@ window.bc.onTranscript((t: TranscriptTurn) => {
   }
   row.className = `${t.speaker} ${t.final ? '' : 'interim'}`.trim()
   row.textContent = `${t.speaker === 'me' ? 'you' : 'them'}: ${t.text}`
-  feedEl.scrollTop = feedEl.scrollHeight
+  keepPinned(feedEl, wasAtBottom)
 })
+
+/**
+ * Tell the main process when the pointer is over the panel.
+ *
+ * The window ignores mouse events so clicks fall through to the call, but that
+ * also means the scroll wheel never reaches us. `forward: true` keeps delivering
+ * mousemove, so we can switch interactivity on the moment the pointer arrives
+ * and back off when it leaves.
+ */
+function trackHover(): void {
+  let inside = false
+  const set = (on: boolean): void => {
+    if (on === inside) return
+    inside = on
+    window.bc.setInteractive(on)
+  }
+  document.addEventListener('mousemove', () => set(true))
+  document.addEventListener('mouseleave', () => set(false))
+  window.addEventListener('blur', () => set(false))
+}
 
 async function boot(): Promise<void> {
   try {
@@ -81,4 +121,5 @@ async function boot(): Promise<void> {
   }
 }
 
+trackHover()
 void boot()

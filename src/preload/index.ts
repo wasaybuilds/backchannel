@@ -6,6 +6,7 @@ const api = {
     ipcRenderer.send(CH.audioState, { active, sampleRate }),
   audioChunk: (chunk: ArrayBuffer) => ipcRenderer.send(CH.audioChunk, chunk),
   ask: (question: string) => ipcRenderer.send(CH.ask, question),
+  setInteractive: (on: boolean) => ipcRenderer.send(CH.interactive, on),
 
   onTranscript: (fn: (t: TranscriptTurn) => void) =>
     ipcRenderer.on(CH.transcript, (_e, t) => fn(t)),
