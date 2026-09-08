@@ -1,0 +1,32 @@
+{
+  "name": "backchannel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Invisible real-time meeting copilot for Windows. Hears the call, sees the screen, answers before you have to.",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "tsc --noEmit && electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "electron",
+    "meeting-assistant",
+    "claude",
+    "deepgram",
+    "realtime"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "electron": "^44.2.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.124.0",
+    "dotenv": "^17.4.2"
+  }
+}

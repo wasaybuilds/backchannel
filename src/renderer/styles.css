@@ -1,0 +1,93 @@
+:root {
+  --bg: rgba(16, 17, 20, 0.82);
+  --line: rgba(255, 255, 255, 0.09);
+  --text: #ecedef;
+  --dim: #8b8f98;
+  --gist: #f0b429;
+  --live: #35c46b;
+  --err: #f2585b;
+}
+
+* { box-sizing: border-box; margin: 0; }
+
+body {
+  background: transparent;
+  font: 13px/1.55 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  overflow: hidden;
+  user-select: none;
+}
+
+#panel {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  backdrop-filter: blur(22px) saturate(140%);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+#bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+
+#dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); flex: none; }
+#dot.listening { background: var(--live); box-shadow: 0 0 8px var(--live); }
+#dot.thinking { background: var(--gist); animation: pulse 1s ease-in-out infinite; }
+#dot.error { background: var(--err); }
+
+@keyframes pulse { 50% { opacity: 0.25; } }
+
+#status { font-size: 11px; letter-spacing: 0.03em; text-transform: uppercase; color: var(--dim); }
+#hint { margin-left: auto; font-size: 10px; color: var(--dim); opacity: 0.6; white-space: nowrap; }
+
+#answers { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
+#answers:empty::after {
+  content: "Listening. I'll speak up when they ask something.";
+  color: var(--dim);
+  font-style: italic;
+}
+
+.answer { border-left: 2px solid var(--line); padding-left: 11px; animation: rise 0.18s ease-out; }
+@keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+
+.answer .q {
+  font-size: 11px;
+  color: var(--dim);
+  margin-bottom: 6px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.answer .gist {
+  color: var(--gist);
+  font-weight: 600;
+  margin-bottom: 7px;
+  white-space: pre-wrap;
+}
+.answer .full { white-space: pre-wrap; user-select: text; }
+.answer .full:empty::after { content: "▍"; color: var(--dim); animation: pulse 0.9s infinite; }
+.answer.shot .q::before { content: "🖵 "; }
+
+#feed {
+  border-top: 1px solid var(--line);
+  padding: 8px 12px;
+  max-height: 92px;
+  overflow-y: auto;
+  font-size: 11px;
+  color: var(--dim);
+}
+#feed .them { color: #b9bdc6; }
+#feed .interim { opacity: 0.45; font-style: italic; }
+
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 3px; }
