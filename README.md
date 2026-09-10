@@ -13,25 +13,6 @@ first words on screen in **~1.5s**, the considered answer at **~2.5s** — with 
 
 ---
 
-## What it looks like in practice
-
-They ask a question out loud. Roughly a second and a half later a line appears
-that you can read straight out:
-
-> *"Yeah, the one that sticks out is our checkout latency. Our p95 was sitting
-> at 820 milliseconds, and it turned out to be an N+1 in the cart service. I
-> batched the queries instead of looping over them, and that took us down to
-> 190 milliseconds."*
->
-> *"if they push: The other big one was a MySQL to Postgres migration in Q2,
-> about 40 million rows, with 11 minutes of downtime."*
-
-Those numbers came out of a file you dropped in `context/` before the call. That
-is the whole idea: you know your own work, you just can't recall the figures
-with someone watching.
-
----
-
 ## How it works
 
 ```
