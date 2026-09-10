@@ -73,17 +73,21 @@ substitutions — notation becomes the words a person actually says:
 |---|---|
 | `HH:MM` | "a time, hours and minutes" |
 | `O(1)` | "constant time" |
-| `820ms -> 190ms` | "820 milliseconds down to 190" |
-| `A4e` | "A, then four unknowns, then e" |
+| `820ms -> 190ms` | "820ms down to 190" |
+| `A4e` | "A, then 4 unknowns, then e" |
+
+Figures are the exception and stay as digits — you are scanning this
+mid-sentence, and `24` registers where "twenty-four" does not. Translate the
+symbols, leave the numbers alone.
 
 The difference in practice, same question, before and after the rule:
 
 > ~~"Task two is four digits arranged as HH colon MM, and I count the distinct
 > valid 24-hour times."~~
 >
-> "Oh, that one's the clock puzzle. Four digits only give you twenty-four
-> arrangements, so I just enumerate all of them and check the hour's at most
-> twenty-three and the minute at most fifty-nine."
+> "Oh, that one's the clock puzzle. Four digits only give you 24 arrangements,
+> so I just enumerate all of them and check the hour's at most 23 and the
+> minute at most 59."
 
 It is also told firmly that every specific — figure, date, headcount — must come
 from your brief or the transcript. Invented detail is the real failure mode
@@ -132,7 +136,7 @@ Drop anything it should know into `context/`:
 ```
 context/
 ├── my-cv.pdf
-├── interview-prep-guide.pdf
+├── the-brief.pdf
 ├── their-company-notes.md
 └── pricing.csv
 ```
@@ -142,7 +146,7 @@ context/
 order.
 
 Everything is pinned in the prompt cache, so **being thorough is nearly free**.
-Measured with a 63KB prep guide plus a CV: ~27k tokens paid once at launch, then
+Measured with a 63KB PDF plus a CV: ~27k tokens paid once at launch, then
 replayed from cache on every question for the rest of the call. Put in the
 things you blank on — dates, figures, headcounts, what you shipped last quarter.
 
@@ -187,19 +191,18 @@ before a call that matters.
 |---|---|
 | `Alt+Space` | Answer the last thing they said |
 | `Alt+D` | Screenshot my screen, then answer about it |
-| `Alt+H` | Hide the panel |
-| `Alt+S` | Show it again |
 | `Alt+V` | Solve whatever I just copied — returns code |
 | `Alt+X` | Copy that code to my clipboard |
 | `Alt+↑` / `Alt+↓` | Scroll the answers |
+| `Alt+H` / `Alt+S` | Hide / show the panel |
 | `Alt+Q` | Quit |
 
 It also fires on its own whenever the other person finishes something that reads
 like a question — including "So walk me through…" and "Okay, and how big was the
-team.", which do not open on an interrogative or end in a question mark.
+team.", neither of which opens on an interrogative or ends in a question mark.
 
-Override any key with `HOTKEY_HIDE`, `HOTKEY_SHOW`, `HOTKEY_ANSWER`,
-`HOTKEY_SCREEN`, `HOTKEY_CODE`, `HOTKEY_COPY`, `HOTKEY_UP`, `HOTKEY_DOWN`,
+Override any key with `HOTKEY_ANSWER`, `HOTKEY_SCREEN`, `HOTKEY_CODE`,
+`HOTKEY_COPY`, `HOTKEY_UP`, `HOTKEY_DOWN`, `HOTKEY_HIDE`, `HOTKEY_SHOW`,
 `HOTKEY_QUIT` in `.env`.
 
 **Why Alt and not Shift.** These register system-wide. A bare `Shift+H` would
@@ -208,41 +211,44 @@ and hide the panel instead. Alt is the lightest modifier that does not collide
 with typing. If another app already owns a shortcut, startup logs which one was
 refused rather than failing silently.
 
-**The panel takes no mouse input, ever.** No clicks, no selection, no cursor
-change — every click and wheel tick passes through to whatever is underneath.
-An overlay that occasionally swallows a click meant for Zoom or your editor is
-worse than one you cannot point at, so scrolling is `Alt+↑`/`Alt+↓` and code
-leaves via `Alt+X` rather than a drag-select. One key beats sweeping a
-selection with a mouse the panel cannot see.
-
-`Alt+X` copies just the fenced code, not the line you were meant to say aloud
-or the trailing note — pasting those into an editor would be its own tell.
-
-Answers only auto-scroll while you are already at the bottom, so scrolling up
-to re-read will not be undone by the next streaming token.
-
-**Clicking it never reveals it.** Content protection and mouse handling are
-independent — the panel is excluded from capture whether or not you can click
-it. Hovering, scrolling and selecting text change nothing about what the other
-person sees.
-
-**One instance only.** A second copy cannot take global shortcuts the first one
-already holds, so it would come up mute and make the original look broken.
-Launching again just re-shows the running panel.
-
 **`Alt+Q` is the only way out.** The window is frameless and hidden from the
-taskbar by design, so there is no close button and nothing to alt-tab to. If you
-ever lose the hotkey, end `electron.exe` in Task Manager.
+taskbar by design, so there is no close button and nothing to alt-tab to. Only
+one instance runs at a time — a second copy cannot take the shortcuts the first
+one holds, so it would come up mute and make the original look broken.
 
-### Coding rounds
+---
+
+## The panel takes no mouse input, ever
+
+No clicks, no selection, no cursor change. Every click and wheel tick passes
+straight through to whatever is underneath.
+
+This is deliberate and it cost a rewrite to get right. An earlier version made
+the panel live while the pointer was over it, so the wheel could reach it — but
+that meant it could swallow a click you aimed at Zoom or your editor, and it put
+a text cursor under anything selectable. An overlay that occasionally eats a
+click is worse than one you cannot point at.
+
+So the mouse is replaced by keys: `Alt+↑`/`Alt+↓` to scroll, `Alt+X` to lift the
+code out. One key beats sweeping a selection with a mouse the panel cannot see.
+
+Answers auto-scroll only while you are already at the bottom, so scrolling up to
+re-read is not undone by the next streaming token.
+
+None of this affects the invisibility. Content protection and mouse handling are
+independent — the panel is excluded from screen capture regardless.
+
+---
+
+## Coding rounds
 
 If they put you in an editor, copy the problem or the broken function and press
-`Alt+V`. The clipboard beats the screenshot here — Claude gets exact text rather
-than pixels, and you get code you can paste back.
+`Alt+V`. The clipboard beats the screenshot here: Claude gets exact text rather
+than pixels, and you get something you can paste back.
 
-Coding mode is deliberately the inverse of the spoken persona. You get one line
-to say while you start typing, then a real fenced code block, then the follow-up
-an interviewer will probe:
+Coding mode is the inverse of the spoken persona. One line to say while you
+start typing, then a real fenced code block, then the thing an interviewer
+probes next:
 
 > *"Yeah, that nested scan is O(n²) — I'd keep a map of value to index so it's
 > one pass."*
@@ -263,11 +269,14 @@ an interviewer will probe:
 > *note: O(n) time, O(n) extra space. Checking the complement before inserting
 > is what stops an element pairing with itself.*
 
-It matches the language, naming and indentation of what you pasted, adds the
-edge-case guards an interviewer asks about first, and stays out of the spoken
-conversation history — a pasted 200-line file would otherwise distort every
-answer for the rest of the call. Clipboard input is capped at 24k characters so
-a stray Ctrl+A does not send your whole file.
+It matches the language, naming and indentation of what you pasted, and adds the
+edge-case guards an interviewer asks about first. `Alt+X` then copies **only the
+fenced code** — not the line you were meant to say aloud, not the trailing note,
+since pasting either into an editor would be its own tell.
+
+Code answers stay out of the spoken conversation history: a pasted 200-line file
+would otherwise distort every answer for the rest of the call. Clipboard input is
+capped at 24k characters so a stray `Ctrl+A` does not upload your whole file.
 
 ---
 
@@ -334,8 +343,10 @@ src/
 │   ├── audio.ts               mic + loopback -> stereo
 │   ├── public/pcm-worklet.js  float -> interleaved PCM16, audio thread
 │   └── main.ts                overlay
-├── shared/ipc.ts  channel names and payload types
-└── test/          npm test — question detection and echo, no API calls
+└── shared/ipc.ts  channel names and payload types
+
+test/              npm test — question detection and echo, no API calls
+context/           your briefing files (gitignored)
 ```
 
 API keys live in the main process only. The renderer captures audio and posts
