@@ -14,9 +14,13 @@
   "keywords": [
     "electron",
     "meeting-assistant",
+    "real-time",
+    "speech-to-text",
     "claude",
     "deepgram",
-    "realtime"
+    "overlay",
+    "interview-assistant",
+    "windows"
   ],
   "license": "MIT",
   "devDependencies": {
@@ -29,5 +33,10 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
     "dotenv": "^17.4.2"
+  },
+  "author": "Abdul Wasay",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wasaybuilds/backchannel.git"
   }
 }

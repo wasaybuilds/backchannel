@@ -359,4 +359,4 @@ npm run build   # typecheck + bundle
 
 ## Licence
 
-MIT
+MIT — see [LICENSE](LICENSE).
