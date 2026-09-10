@@ -1,7 +1,7 @@
 import { config as loadEnv } from 'dotenv'
 import { app } from 'electron'
 import { extname, join } from 'node:path'
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
 
 loadEnv()
 
@@ -177,4 +177,46 @@ export const HOTKEY_ENV: Record<keyof typeof HOTKEYS, string> = {
   scrollDown: 'HOTKEY_DOWN',
   copyCode: 'HOTKEY_COPY',
   quit: 'HOTKEY_QUIT'
+}
+
+/** Where uploaded briefing files live. Created on demand. */
+export function contextDir(): string {
+  const dir = join(process.cwd(), 'context')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+export interface ContextFile {
+  name: string
+  bytes: number
+  kind: 'pdf' | 'text' | 'ignored'
+}
+
+/** What is currently in the briefing folder, and whether we can read it. */
+export function listContext(): ContextFile[] {
+  const dir = contextDir()
+  return readdirSync(dir)
+    .filter((n) => !n.startsWith('.'))
+    .sort()
+    .map((name) => {
+      const ext = extname(name).toLowerCase()
+      return {
+        name,
+        bytes: statSync(join(dir, name)).size,
+        kind: ext === '.pdf' ? 'pdf' : READABLE.includes(ext) ? 'text' : 'ignored'
+      }
+    })
+}
+
+/**
+ * Forget the frozen briefing so the next read picks up new files.
+ *
+ * Both caches exist to keep the prompt prefix byte-stable, so clearing them
+ * deliberately invalidates Anthropic's cache too — the caller is expected to
+ * re-warm afterwards, or the next question pays full price for the whole
+ * briefing instead of ~10%.
+ */
+export function reloadContext(): void {
+  contextCache = null
+  pdfCache = null
 }

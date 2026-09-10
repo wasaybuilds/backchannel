@@ -166,6 +166,52 @@ before a call that matters.
 
 ---
 
+## Control console
+
+Briefings used to mean editing a folder and restarting. Now there is a small
+web console — and because it is served over HTTP rather than being a window,
+**you can open it on your phone.** Mid-call, glancing at a phone is normal;
+alt-tabbing to a settings window is not.
+
+```bash
+CONSOLE_PORT=7331     # default
+CONSOLE_LAN=true      # bind to your Wi-Fi so a phone can reach it
+```
+
+Startup prints the URL and a scannable QR:
+
+```
+[console] http://127.0.0.1:7331/?t=e68f1bb2...
+[console] phone: http://192.168.100.104:7331/?t=e68f1bb2...   (Wi-Fi)
+    <QR>
+[console] if that will not load, try one of these instead:
+             http://172.18.160.1:7331/?t=...   (vEthernet (Default Switch))
+```
+
+From it you can upload briefing files, drop ones you no longer want, apply the
+change, trigger an answer, type a specific question, and hide or show the
+panel — all without touching the machine running the call.
+
+**Uploading does not take effect until you press "Apply & warm."** That is
+deliberate. The briefing is part of the cached prompt prefix, so changing it
+invalidates Anthropic's cache; applying reloads it and re-pays the cache up
+front (~2-3s) so your next question is fast rather than waiting on a cold
+upload. Verified end to end: a file uploaded over HTTP is answerable seconds
+later with no restart.
+
+**On the token.** `CONSOLE_LAN=true` puts the port on every network you join,
+so every request needs the token from that URL. Without one, any page you
+happened to visit could POST to the port and upload context or trigger runs.
+Requests with a wrong or missing token get a 401. Uploads are capped at 8MB,
+restricted to readable formats, and filenames are stripped to a basename so
+`../../escaped.md` lands inside `context/` rather than anywhere else.
+
+The address is a guess — Windows enumerates Hyper-V, WSL and Docker adapters
+ahead of the real one, so the ranking prefers Wi-Fi and Ethernet over virtual
+adapters and prints the rest as fallbacks.
+
+---
+
 ## Hotkeys
 
 | Key | Does |

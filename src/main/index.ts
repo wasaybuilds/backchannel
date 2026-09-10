@@ -1,7 +1,11 @@
 import { app, BrowserWindow, clipboard, desktopCapturer, globalShortcut, ipcMain, session, screen } from 'electron'
 import { join } from 'node:path'
 import { CH, type AnswerTier, type Status } from '@shared/ipc'
-import { briefingPdfs, HOTKEY_ENV, HOTKEYS, meetingContext, missingKeys } from './config'
+import {
+  briefingPdfs, HOTKEY_ENV, HOTKEYS, meetingContext, missingKeys,
+  reloadContext, REPLY_LANGUAGE, STT_LANGUAGE
+} from './config'
+import { Console } from './server'
 import { Transcript } from './transcript'
 import { Stt } from './stt'
 import { Brain } from './brain'
@@ -10,6 +14,9 @@ import { screenshot } from './capture'
 let win: BrowserWindow | null = null
 /** Newest code answer, kept so a hotkey can put it on the clipboard. */
 let lastCode = ''
+let console_: Console | null = null
+/** False until the briefing has been paid for, so the console can show it. */
+let warm = false
 const transcript = new Transcript()
 let stt: Stt | null = null
 let brain: Brain | null = null
@@ -130,8 +137,45 @@ function startServices(): void {
     onError: (message) => setStatus({ kind: 'error', message })
   })
 
-  // Pay the briefing's upload cost now, while nobody is waiting on an answer.
-  void brain.prewarm()
+  void warmUp()
+}
+
+/**
+ * Pay for the briefing while nobody is waiting on an answer. Called at launch
+ * and again whenever the console swaps the context, since changing it
+ * invalidates the cached prefix by design.
+ */
+async function warmUp(): Promise<void> {
+  warm = false
+  await brain?.prewarm()
+  warm = true
+}
+
+/** Reload the briefing from disk and re-pay the cache. */
+async function applyContext(): Promise<void> {
+  reloadContext()
+  brain?.reset()
+  meetingContext()
+  briefingPdfs()
+  await warmUp()
+}
+
+function startConsole(): void {
+  const port = Number(process.env.CONSOLE_PORT || 7331)
+  const lan = process.env.CONSOLE_LAN === 'true'
+
+  console_ = new Console({
+    apply: applyContext,
+    ask: (question) => ask(question || transcript.lastFromThem() || 'What should I say next?'),
+    setPanel: (visible) => (visible ? win?.showInactive() : win?.hide()),
+    state: () => ({
+      warm,
+      listening: Boolean(stt),
+      language: STT_LANGUAGE,
+      reply: REPLY_LANGUAGE
+    })
+  })
+  console_.listen(port, lan)
 }
 
 async function ask(question: string, withScreen = false): Promise<void> {
@@ -225,7 +269,10 @@ if (isOnlyInstance) app.whenReady().then(() => {
   const missing = missingKeys()
 
   wireLoopbackAudio()
-  if (!missing.length) startServices()
+  if (!missing.length) {
+    startServices()
+    startConsole()
+  }
   createWindow()
   registerHotkeys()
 
@@ -256,6 +303,7 @@ if (isOnlyInstance) app.whenReady().then(() => {
 })
 
 app.on('will-quit', () => {
+  console_?.close()
   globalShortcut.unregisterAll()
   stt?.stop()
 })
