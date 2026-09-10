@@ -1,6 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { AnswerTier } from '@shared/ipc'
-import { briefingPdfs, FULL_MODEL, GIST_MODEL, keys, meetingContext } from './config'
+import { briefingPdfs, FULL_MODEL, GIST_MODEL, keys, meetingContext, REPLY_LANGUAGE } from './config'
 import type { Transcript } from './transcript'
 
 /**
@@ -50,7 +50,22 @@ Where facts may come from — this is the rule that matters most:
 - If you are offering something the user should verify before saying it, prefix that line with "unverified:".
 - Never mention that you are an AI, and never address the other participant.`
 
-const GIST_PERSONA = `${PERSONA}
+/**
+ * Appended to both personas. Byte-stable because REPLY_LANGUAGE is read once
+ * at startup, so it stays inside the cached prefix.
+ */
+const LANGUAGE_RULE =
+  REPLY_LANGUAGE.toLowerCase() === 'english'
+    ? ''
+    : `
+
+LANGUAGE: answer in ${REPLY_LANGUAGE}, whatever language the transcript arrives in. The user is going to say your words out loud, so write the language they actually speak.
+
+If that is Roman Urdu, the thing that matters most is this: do NOT translate technical or business vocabulary. Nobody on a real call says the Urdu word for "database", "deployment", "function", "API", "migration", "latency" or "sprint" — they say the English word inside an Urdu sentence, and translating it makes you sound like a textbook rather than a colleague. "Yeh function array traverse kar raha hai, aur p95 latency 190ms tak aa gayi" is how it is actually spoken. Keep proper nouns, product names, numbers and units in their normal form too.
+
+Write Roman Urdu the way people type it to each other, not in an academic transliteration scheme: "kya", "nahi", "abhi", "thora" — no diacritics, no ā or ī. Never use Urdu script; the user is reading this at a glance and Latin letters scan faster.`
+
+const GIST_PERSONA = `${PERSONA}${LANGUAGE_RULE}
 
 You are the FAST tier. A fuller answer is already streaming in behind you, so your only job is to get the user talking. Give them ONE sentence they can start saying immediately — the opening line, in their voice, that buys them the seconds the real answer needs. One sentence. Never apologise for brevity, never say you are being brief.`
 
@@ -144,7 +159,7 @@ export class Brain {
           max_tokens: 4000,
           output_config: { effort: 'medium' },
           system: [
-            { type: 'text', text: CODE_PERSONA },
+            { type: 'text', text: CODE_PERSONA + LANGUAGE_RULE },
             {
               type: 'text',
               text: `MEETING CONTEXT\n${meetingContext()}`,
@@ -267,7 +282,7 @@ export class Brain {
           // context and the whole conversation so far replay at ~10% of cost.
           cache_control: { type: 'ephemeral' },
           system: [
-            { type: 'text', text: PERSONA },
+            { type: 'text', text: PERSONA + LANGUAGE_RULE },
             { type: 'text', text: `MEETING CONTEXT\n${meetingContext()}` }
           ],
           messages: this.history

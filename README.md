@@ -149,6 +149,36 @@ things you blank on — dates, figures, headcounts, what you shipped last quarte
 Read once at startup, so restart after editing. `context/` is gitignored: your
 CV and deal notes never leave the machine except to the two APIs.
 
+### Other languages
+
+```bash
+STT_LANGUAGE=ur              # what Deepgram listens for
+REPLY_LANGUAGE=Roman Urdu    # what Claude writes back
+```
+
+Deepgram nova-3 does Urdu as `ur`, and Claude writes Roman Urdu well — given an
+Urdu-script question it answers like this, which is the point:
+
+> *"Sab se bara migration jo maine kiya wo pichle Q2 mein tha, jab humne 40
+> million rows MySQL se Postgres par move kiye. Poora cutover 11 minutes ki
+> downtime mein ho gaya tha."*
+
+Technical vocabulary deliberately stays English — nobody on a real call says
+the Urdu word for "database" or "latency", and translating it is what makes
+machine Urdu sound like a textbook. The prompt forbids it explicitly.
+
+**The catch is code-switching.** Deepgram's `multi` mode is what handles
+mid-sentence language mixing, and its set is en/es/fr/de/hi/ru/pt/ja/it/nl —
+**Urdu is not in it.** So you can have native Urdu (`ur`) or mid-sentence
+English (`multi`), not both. If you mix heavily, try `ur` first and fall back
+to `hi` under `multi`: spoken Hindustani is near-identical to Urdu, it comes
+back in Devanagari, and Claude reads that without trouble.
+
+Verified: Deepgram accepts `ur`, `hi` and `multi` on nova-3 streaming with
+multichannel, and the Roman Urdu output above is real. **Not** verified is
+Urdu transcription accuracy on live speech — test that with your own voice
+before a call that matters.
+
 ---
 
 ## Hotkeys

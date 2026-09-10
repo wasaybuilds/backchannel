@@ -21,6 +21,25 @@ export const keys = {
   get anthropic() { return required('ANTHROPIC_API_KEY') }
 }
 
+/**
+ * What Deepgram should listen for. `en` by default.
+ *
+ * `ur` gets you Urdu on nova-3, returned in Urdu script. `multi` is the
+ * code-switching mode, but its language set is en/es/fr/de/hi/ru/pt/ja/it/nl —
+ * Urdu is NOT in it, so you cannot have native Urdu and mid-sentence English
+ * at the same time. For Urdu-English mixing, `hi` under `multi` is the closest
+ * thing: spoken Hindustani is near-identical to Urdu and Claude reads the
+ * Devanagari it returns without trouble.
+ */
+export const STT_LANGUAGE = process.env.STT_LANGUAGE || 'en'
+
+/**
+ * What Claude should answer in. Free text, so "Roman Urdu", "Urdu script",
+ * "Spanish" all work. Read once at startup so it stays inside the cached
+ * prompt prefix.
+ */
+export const REPLY_LANGUAGE = process.env.REPLY_LANGUAGE || 'English'
+
 /** Fast first-word model. Lands a one-liner while the real answer is still thinking. */
 export const GIST_MODEL = 'claude-haiku-4-5'
 /** The considered answer. Effort stays low — this is a live call, not an essay. */

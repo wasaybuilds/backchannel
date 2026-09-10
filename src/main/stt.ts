@@ -1,5 +1,5 @@
 import type { Speaker } from '@shared/ipc'
-import { keys } from './config'
+import { keys, STT_LANGUAGE } from './config'
 
 /** ch0 carries your mic, ch1 carries the meeting. See renderer/audio.ts. */
 const CHANNEL_TO_SPEAKER: Speaker[] = ['me', 'them']
@@ -38,6 +38,7 @@ export class Stt {
     this.closing = false
     const params = new URLSearchParams({
       model: 'nova-3',
+      language: STT_LANGUAGE,
       encoding: 'linear16',
       sample_rate: String(sampleRate),
       channels: '2',
@@ -49,6 +50,7 @@ export class Stt {
       endpointing: '300'
     })
 
+    console.log(`[stt] listening in "${STT_LANGUAGE}"`)
     const ws = new WebSocket(`wss://api.deepgram.com/v1/listen?${params}`, [
       'token',
       keys.deepgram
