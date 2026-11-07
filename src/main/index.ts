@@ -2,8 +2,8 @@ import { app, BrowserWindow, clipboard, desktopCapturer, globalShortcut, ipcMain
 import { join } from 'node:path'
 import { CH, type AnswerTier, type Status } from '@shared/ipc'
 import {
-  briefingPdfs, HOTKEY_ENV, HOTKEYS, meetingContext, missingKeys,
-  reloadContext, REPLY_LANGUAGE, STT_LANGUAGE
+  briefingPdfs, HOTKEY_ENV, HOTKEYS, languages, meetingContext, missingKeys,
+  reloadContext
 } from './config'
 import { Console } from './server'
 import { Transcript } from './transcript'
@@ -42,6 +42,10 @@ function createWindow(): void {
     transparent: true,
     resizable: false,
     skipTaskbar: true,
+    // WS_EX_TOOLWINDOW on Windows. skipTaskbar alone keeps it out of the
+    // taskbar but not the Alt+Tab switcher, and that switcher IS captured
+    // when you share your whole screen, showing "Backchannel" to the call.
+    type: 'toolbar',
     alwaysOnTop: true,
     // Never steal focus from Zoom — typing must keep going to the call.
     focusable: false,
@@ -134,7 +138,10 @@ function startServices(): void {
       send(CH.answerDelta, { id, tier, text: '', done: true })
       if (tier === 'full') setStatus({ kind: 'listening' })
     },
-    onError: (message) => setStatus({ kind: 'error', message })
+    onError: (message) => {
+      console.log(`[answer error] ${message}`)
+      setStatus({ kind: 'error', message })
+    }
   })
 
   void warmUp()
@@ -166,13 +173,26 @@ function startConsole(): void {
 
   console_ = new Console({
     apply: applyContext,
+    setLanguage: async (listen, reply) => {
+      if (listen && listen !== languages.stt) {
+        languages.stt = listen
+        stt?.restart()
+      }
+      if (reply && reply !== languages.reply) {
+        languages.reply = reply
+        console.log(`[lang] replying in "${reply}"`)
+        // The reply language is in the cached prefix; re-warm with the new one.
+        await applyContext()
+      }
+    },
     ask: (question) => ask(question || transcript.lastFromThem() || 'What should I say next?'),
     setPanel: (visible) => (visible ? win?.showInactive() : win?.hide()),
     state: () => ({
       warm,
       listening: Boolean(stt),
-      language: STT_LANGUAGE,
-      reply: REPLY_LANGUAGE
+      language: languages.stt,
+      reply: languages.reply,
+      ...(brain?.status() ?? { provider: null, claudeDown: '' })
     })
   })
   console_.listen(port, lan)

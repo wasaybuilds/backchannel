@@ -65,6 +65,10 @@ export const CONSOLE_HTML = `<!doctype html>
        min-height:auto; cursor:pointer; }
   .empty { color:var(--dim); font-size:13.5px; font-style:italic; padding:8px 0; }
 
+  .lbl { display:flex; align-items:center; justify-content:space-between; gap:10px;
+         font-size:14px; padding:4px 0; }
+  select { font:inherit; color:var(--text); background:#0f1116; border:1px solid var(--line);
+           border-radius:9px; padding:9px 10px; min-height:42px; flex:0 1 60%; }
   textarea { width:100%; background:#0f1116; color:var(--text); border:1px solid var(--line);
              border-radius:9px; padding:11px; font:inherit; resize:vertical; min-height:74px; }
   #toast { position:fixed; left:50%; bottom:20px; transform:translateX(-50%);
@@ -83,11 +87,38 @@ export const CONSOLE_HTML = `<!doctype html>
 </header>
 
 <section>
+  <h2>Language</h2>
+  <label class="lbl">They speak
+    <select id="stt">
+      <option value="en">English only</option>
+      <option value="multi">Urdu + English mixed</option>
+      <option value="ur">Urdu only</option>
+    </select>
+  </label>
+  <label class="lbl">Answer me in
+    <select id="reply">
+      <option value="English">English</option>
+      <option value="Roman Urdu">Roman Urdu</option>
+      <option value="match">Same language they asked in</option>
+    </select>
+  </label>
+</section>
+
+<section>
   <h2>Briefing</h2>
   <div id="drop">Tap to add files, or drop them here<br><span style="font-size:12px">pdf, md, txt, csv, json, code</span></div>
   <input id="file" type="file" multiple hidden
          accept=".pdf,.md,.txt,.json,.csv,.ts,.js,.py,.sql,.yaml,.yml">
   <ul id="files"></ul>
+</section>
+
+<section>
+  <h2>Job description <span id="jdstate" style="text-transform:none; letter-spacing:0; font-weight:400"></span></h2>
+  <textarea id="jd" rows="7" placeholder="Paste the job description here. Answers will be aimed at this role, using only what's really in your CV."></textarea>
+  <div class="row" style="margin-top:8px">
+    <button id="jdsave" class="primary">Save &amp; apply</button>
+    <button id="jdclear">Clear</button>
+  </div>
 </section>
 
 <section>
@@ -152,12 +183,24 @@ function render(s) {
       ul.appendChild(li);
     }
   }
+  if (s.jd !== undefined) {
+    $('#jdstate').textContent = s.jd ? '· saved' : '· none';
+    $('#jdstate').style.color = s.jd ? 'var(--go)' : 'var(--dim)';
+  }
+  if (s.language && document.activeElement !== $('#stt')) $('#stt').value = s.language;
+  if (s.reply && document.activeElement !== $('#reply')) {
+    if (![...$('#reply').options].some((o) => o.value === s.reply)) $('#reply').add(new Option(s.reply, s.reply));
+    $('#reply').value = s.reply;
+  }
   if (s.warm !== undefined) {
     $('#dot').className = s.listening ? (s.warm ? 'on' : 'warm') : '';
     const bits = [];
     if (s.language) bits.push('hears ' + s.language);
     if (s.reply) bits.push('replies ' + s.reply);
     bits.push(s.warm ? 'cache warm' : 'cache cold');
+    if (s.claudeDown) bits.push('via Gemini');
+    else if (s.provider) bits.push('via ' + (s.provider === 'claude' ? 'Claude' : 'Gemini'));
+    $('#meta').title = s.claudeDown ? 'Claude unavailable: ' + s.claudeDown : '';
     $('#meta').textContent = bits.join(' · ');
   }
 }
@@ -191,6 +234,36 @@ $('#file').onchange = (e) => { upload([...e.target.files]); e.target.value = '';
     if (ev === 'drop') upload([...e.dataTransfer.files]);
   })
 );
+
+async function saveJd(text, b) {
+  if (busy) return;
+  busy = true;
+  const label = b.textContent;
+  b.textContent = 'Saving...';
+  b.disabled = true;
+  try {
+    await api('/api/jd', { method: 'POST', body: text });
+    b.textContent = 'Warming...';
+    render(await api('/api/apply', { method: 'POST' }));
+    toast(text ? 'Job description applied' : 'Job description cleared');
+  } catch (err) { toast(err.message, true); }
+  b.textContent = label;
+  b.disabled = false;
+  busy = false;
+}
+$('#jdsave').onclick = (e) => saveJd($('#jd').value.trim(), e.target);
+$('#jdclear').onclick = (e) => { $('#jd').value = ''; saveJd('', e.target); };
+api('/api/jd').then((r) => { if (!$('#jd').value) $('#jd').value = r.text || ''; }).catch(() => {});
+
+async function setLang(param, value) {
+  try {
+    toast(param === 'reply' ? 'Switching answers, warming...' : 'Switching listener...');
+    render(await api('/api/language?' + param + '=' + encodeURIComponent(value), { method: 'POST' }));
+    toast('Language updated');
+  } catch (err) { toast(err.message, true); }
+}
+$('#stt').onchange = (e) => setLang('stt', e.target.value);
+$('#reply').onchange = (e) => setLang('reply', e.target.value);
 
 $('#apply').onclick = async (e) => {
   if (busy) return;

@@ -4,6 +4,25 @@ import type { Speaker, TranscriptTurn } from '@shared/ipc'
 const INTERROGATIVE =
   /^(what|how|why|when|where|who|which|can|could|would|will|do|does|did|is|are|was|were|have|has|should|tell me|walk me|explain|describe|talk me)\b/i
 
+/**
+ * Urdu question words, in the three forms they arrive in: Roman letters, Urdu
+ * script, and Devanagari (Deepgram's `multi` and `hi` return Urdu as Hindi).
+ * Urdu puts these mid-sentence — "aap ka experience kitna hai" — so unlike the
+ * English list they match anywhere, not just at the start.
+ */
+const URDU_INTERROGATIVE = new RegExp(
+  '(?<![\p{L}\p{M}])(?:' +
+    [
+      'kya', 'kia', 'kyun', 'kyon', 'kiyon', 'kaise', 'kaisay', 'kesay', 'kaisa', 'kahan', 'kahaan',
+      'kaun', 'kon', 'kitna', 'kitni', 'kitne', 'kidhar', 'batao', 'bataen', 'bataein', 'bataiye',
+      'samjhao', 'samjhaiye',
+      'کیا', 'کیوں', 'کیسے', 'کیسا', 'کب', 'کہاں', 'کون', 'کتنا', 'کتنی', 'کتنے', 'بتائیں', 'بتاؤ', 'بتائیے', 'سمجھائیں',
+      'क्या', 'क्यों', 'कैसे', 'कैसा', 'कब', 'कहाँ', 'कहां', 'कौन', 'कितना', 'कितनी', 'कितने', 'बताइए', 'बताइये', 'बताओ', 'बताएं', 'बताएँ', 'समझाइए'
+    ].join('|') +
+    ')(?![\p{L}\p{M}])',
+  'iu'
+)
+
 /** How far back to look for the original when deciding something is echo. */
 const ECHO_WINDOW_MS = 8000
 /** Share of the mic's words that must also appear in their turn. */
@@ -18,8 +37,14 @@ const ECHO_MIN_WORDS = 4
  */
 const FILLER = /^(?:(?:so|and|but|ok|okay|now|well|um|uh|er|right|yeah|yes|alright|anyway|like|i mean|you know|just|actually|sorry)\b[,.\s]*)+/i
 
+/**
+ * Unicode-aware on purpose. An ASCII-only filter erased Urdu and Devanagari
+ * entirely, so their echo scored zero overlap and leaked through as "ME".
+ */
 function tokens(text: string): Set<string> {
-  return new Set(text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean))
+  return new Set(
+    text.toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s]/gu, '').split(/\s+/).filter(Boolean)
+  )
 }
 
 /** Fraction of `a` that also appears in `b`. */
@@ -122,7 +147,9 @@ export class Transcript {
   static isQuestion(text: string): boolean {
     const t = text.trim()
     if (t.length < 8) return false
-    if (t.endsWith('?')) return true
+    // '؟' is the Urdu question mark.
+    if (/[?؟]$/.test(t)) return true
+    if (URDU_INTERROGATIVE.test(t)) return true
     // Strip the run-up before testing: transcribed speech rarely opens on the
     // interrogative, and Deepgram punctuates plenty of real questions with '.'.
     return INTERROGATIVE.test(t.replace(FILLER, ''))

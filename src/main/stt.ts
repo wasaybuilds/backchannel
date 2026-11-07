@@ -1,5 +1,5 @@
 import type { Speaker } from '@shared/ipc'
-import { keys, STT_LANGUAGE } from './config'
+import { keys, languages } from './config'
 
 /** ch0 carries your mic, ch1 carries the meeting. See renderer/audio.ts. */
 const CHANNEL_TO_SPEAKER: Speaker[] = ['me', 'them']
@@ -28,6 +28,7 @@ export interface SttEvents {
 export class Stt {
   private ws: WebSocket | null = null
   private keepAlive: NodeJS.Timeout | null = null
+  private sampleRate = 0
   private closing = false
   /** Audio captured before the socket finished opening. */
   private backlog: ArrayBuffer[] = []
@@ -36,9 +37,11 @@ export class Stt {
 
   start(sampleRate: number): void {
     this.closing = false
+    this.sampleRate = sampleRate
+    const language = languages.stt
     const params = new URLSearchParams({
       model: 'nova-3',
-      language: STT_LANGUAGE,
+      language,
       encoding: 'linear16',
       sample_rate: String(sampleRate),
       channels: '2',
@@ -50,7 +53,7 @@ export class Stt {
       endpointing: '300'
     })
 
-    console.log(`[stt] listening in "${STT_LANGUAGE}"`)
+    console.log(`[stt] listening in "${language}"`)
     const ws = new WebSocket(`wss://api.deepgram.com/v1/listen?${params}`, [
       'token',
       keys.deepgram
@@ -62,6 +65,7 @@ export class Stt {
       for (const chunk of this.backlog) ws.send(chunk)
       this.backlog = []
       // Deepgram drops idle sockets after ~10s of no audio.
+      this.clearKeepAlive()
       this.keepAlive = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'KeepAlive' }))
       }, 8000)
@@ -89,12 +93,23 @@ export class Stt {
     })
 
     ws.addEventListener('close', () => {
+      // A restart swaps in a new socket before this old one finishes closing;
+      // it must not tear down the replacement's keep-alive or reconnect over it.
+      if (this.ws !== ws) return
       this.clearKeepAlive()
       if (!this.closing) {
         // Network blips mid-call are expected; come back quietly.
         setTimeout(() => this.start(sampleRate), 1000)
       }
     })
+  }
+
+  /** Reopen with the current `languages.stt`. No-op until audio has started. */
+  restart(): void {
+    if (!this.sampleRate || this.closing) return
+    const rate = this.sampleRate
+    this.stop()
+    this.start(rate)
   }
 
   send(chunk: ArrayBuffer): void {
@@ -110,6 +125,9 @@ export class Stt {
     this.clearKeepAlive()
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: 'CloseStream' }))
+      this.ws.close()
+    } else if (this.ws?.readyState === WebSocket.CONNECTING) {
+      // A restart can land mid-handshake; do not leave that socket dangling.
       this.ws.close()
     }
     this.ws = null

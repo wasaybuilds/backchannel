@@ -4,11 +4,13 @@ import { networkInterfaces } from 'node:os'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import QRCode from 'qrcode'
-import { contextDir, listContext, type ContextFile } from './config'
+import { contextDir, listContext, readJobDescription, writeJobDescription, type ContextFile } from './config'
 import { CONSOLE_HTML } from './console-html'
 
 /** Anything larger is a mistake, and it would replay on every question. */
 const MAX_UPLOAD = 8_000_000
+/** What the console offers: English, Urdu-English code-switching, pure Urdu. */
+const STT_CODES = ['en', 'multi', 'ur', 'hi']
 const ALLOWED = ['.pdf', '.md', '.txt', '.json', '.csv', '.ts', '.js', '.py', '.sql', '.yaml', '.yml']
 
 export interface ServerHooks {
@@ -17,7 +19,13 @@ export interface ServerHooks {
   /** Trigger an answer, optionally to a typed question rather than the call. */
   ask(question?: string): Promise<void>
   setPanel(visible: boolean): void
-  state(): { warm: boolean; listening: boolean; language: string; reply: string }
+  /** Switch what Deepgram listens for and/or what Claude answers in. */
+  setLanguage(stt: string | null, reply: string | null): Promise<void>
+  state(): {
+    warm: boolean; listening: boolean; language: string; reply: string
+    /** Which model answered last, and why Claude is benched if it is. */
+    provider: 'claude' | 'gemini' | null; claudeDown: string
+  }
 }
 
 export class Console {
@@ -103,7 +111,19 @@ export class Console {
           return void res.end(CONSOLE_HTML)
 
         case 'GET /api/state':
-          return this.json(res, { files: listContext(), ...this.hooks.state() })
+          return this.json(res, { files: listContext(), jd: readJobDescription() !== '', ...this.hooks.state() })
+
+        case 'GET /api/jd':
+          return this.json(res, { text: readJobDescription() })
+
+        // Saved only; the page calls /api/apply straight after so the new role
+        // lands in the cached prefix before the next question.
+        case 'POST /api/jd': {
+          const body = await readBody(req, 200_000)
+          writeJobDescription(body.toString('utf8'))
+          console.log(`[console] job description ${body.length ? 'saved' : 'cleared'}`)
+          return this.json(res, { ok: true })
+        }
 
         case 'POST /api/upload':
           return void (await this.upload(req, res, url))
@@ -125,6 +145,14 @@ export class Console {
           const question = body.toString('utf8').trim() || undefined
           void this.hooks.ask(question)
           return this.json(res, { ok: true })
+        }
+
+        case 'POST /api/language': {
+          const stt = url.searchParams.get('stt')
+          const reply = url.searchParams.get('reply')
+          if (stt && !STT_CODES.includes(stt)) return this.json(res, { error: `unknown language ${stt}` }, 400)
+          await this.hooks.setLanguage(stt, reply?.slice(0, 40) || null)
+          return this.json(res, { files: listContext(), ...this.hooks.state() })
         }
 
         case 'POST /api/panel':

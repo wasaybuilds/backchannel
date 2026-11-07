@@ -56,5 +56,27 @@ console.log('short acknowledgements survive:')
   ok(t.ingest('me', 'Okay', true) !== null, '"Okay" must not be swallowed as echo')
 }
 
+console.log('urdu questions:')
+for (const q of [
+  'Aap ka experience kitna hai',
+  'Apne last project ke baare mein batao',
+  'आपने पिछली कंपनी क्यों छोड़ी',
+  'آپ کا تجربہ کتنا ہے',
+  'Postgres mein indexing kaise karte hain'
+]) ok(Transcript.isQuestion(q), `should be question: "${q}"`)
+for (const s of ['Theek hai, samajh gaya', 'अच्छा, बहुत बढ़िया है'])
+  ok(!Transcript.isQuestion(s), `should NOT be question: "${s}"`)
+
+console.log('urdu echo is caught:')
+{
+  const t = new Transcript()
+  t.ingest('them', 'आपने पिछली कंपनी में क्या काम किया था', true)
+  ok(t.ingest('me', 'आपने पिछली कंपनी में क्या काम किया था', true) === null, 'Devanagari echo must be dropped')
+  t.ingest('them', 'آپ نے پچھلی کمپنی میں کیا کام کیا', true)
+  ok(t.ingest('me', 'آپ نے پچھلی کمپنی میں کیا کام کیا', true) === null, 'Urdu-script echo must be dropped')
+  t.ingest('me', 'मैंने वहाँ payments का backend बनाया था', true)
+  ok(t.drain().includes('ME: मैंने'), 'genuine Hindi-script answer must survive')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail) process.exitCode = 1

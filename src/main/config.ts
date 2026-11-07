@@ -1,7 +1,7 @@
 import { config as loadEnv } from 'dotenv'
 import { app } from 'electron'
 import { extname, join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 
 loadEnv()
 
@@ -11,14 +11,23 @@ function required(name: string): string {
   return v
 }
 
-/** Names of credentials that are absent, so startup can report instead of crash. */
+/**
+ * Names of credentials that are absent, so startup can report instead of crash.
+ * Answers need Claude or Gemini, not both: with both set, Gemini is the fallback.
+ */
 export function missingKeys(): string[] {
-  return ['DEEPGRAM_API_KEY', 'ANTHROPIC_API_KEY'].filter((k) => !process.env[k])
+  const missing = process.env.DEEPGRAM_API_KEY ? [] : ['DEEPGRAM_API_KEY']
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
+    missing.push('ANTHROPIC_API_KEY or GEMINI_API_KEY')
+  }
+  return missing
 }
 
 export const keys = {
   get deepgram() { return required('DEEPGRAM_API_KEY') },
-  get anthropic() { return required('ANTHROPIC_API_KEY') }
+  /** Empty when unset — either answer provider may be absent. */
+  get anthropic() { return process.env.ANTHROPIC_API_KEY ?? '' },
+  get gemini() { return process.env.GEMINI_API_KEY ?? '' }
 }
 
 /**
@@ -31,19 +40,30 @@ export const keys = {
  * thing: spoken Hindustani is near-identical to Urdu and Claude reads the
  * Devanagari it returns without trouble.
  */
-export const STT_LANGUAGE = process.env.STT_LANGUAGE || 'en'
-
 /**
  * What Claude should answer in. Free text, so "Roman Urdu", "Urdu script",
- * "Spanish" all work. Read once at startup so it stays inside the cached
- * prompt prefix.
+ * "Spanish" all work, plus `MATCH_SPEAKER` to answer in whatever they spoke.
+ *
+ * Both start from .env and can be switched live from the console. The reply
+ * language is part of the cached prompt prefix, so changing it goes through
+ * the console's apply path, which resets the conversation and re-warms.
  */
-export const REPLY_LANGUAGE = process.env.REPLY_LANGUAGE || 'English'
+export const languages = {
+  stt: process.env.STT_LANGUAGE || 'en',
+  reply: process.env.REPLY_LANGUAGE || 'English'
+}
+
+/** Reply-language value meaning "answer in the language they just used". */
+export const MATCH_SPEAKER = 'match'
 
 /** Fast first-word model. Lands a one-liner while the real answer is still thinking. */
 export const GIST_MODEL = 'claude-haiku-4-5'
 /** The considered answer. Effort stays low — this is a live call, not an essay. */
 export const FULL_MODEL = 'claude-opus-5'
+
+/** Gemini fallback, same two tiers. Flash-Lite thinks minimally by default. */
+export const GEMINI_GIST_MODEL = process.env.GEMINI_FAST_MODEL || 'gemini-3.5-flash-lite'
+export const GEMINI_FULL_MODEL = process.env.GEMINI_FULL_MODEL || 'gemini-3.8-flash'
 
 /** Text formats we can drop straight into the prompt. */
 const READABLE = ['.md', '.txt', '.json', '.csv', '.ts', '.js', '.py', '.sql', '.yaml', '.yml']
@@ -122,7 +142,10 @@ export function meetingContext(): string {
       if (!READABLE.includes(extname(name).toLowerCase())) continue
       const file = join(dir, name)
       if (!statSync(file).isFile()) continue
-      parts.push(section(name, readFileSync(file, 'utf8')))
+      // Labelled so the persona's job-description rule knows which part is the
+      // role and which parts are the user's own history.
+      const label = name === JD_FILE ? 'JOB DESCRIPTION (the role this call is about)' : name
+      parts.push(section(label, readFileSync(file, 'utf8')))
     }
   }
 
@@ -179,6 +202,9 @@ export const HOTKEY_ENV: Record<keyof typeof HOTKEYS, string> = {
   quit: 'HOTKEY_QUIT'
 }
 
+/** The pasted job description, kept apart from the file list in the console. */
+export const JD_FILE = 'job-description.md'
+
 /** Where uploaded briefing files live. Created on demand. */
 export function contextDir(): string {
   const dir = join(process.cwd(), 'context')
@@ -196,7 +222,7 @@ export interface ContextFile {
 export function listContext(): ContextFile[] {
   const dir = contextDir()
   return readdirSync(dir)
-    .filter((n) => !n.startsWith('.'))
+    .filter((n) => !n.startsWith('.') && n !== JD_FILE)
     .sort()
     .map((name) => {
       const ext = extname(name).toLowerCase()
@@ -206,6 +232,19 @@ export function listContext(): ContextFile[] {
         kind: ext === '.pdf' ? 'pdf' : READABLE.includes(ext) ? 'text' : 'ignored'
       }
     })
+}
+
+/** The saved job description, or '' if none. */
+export function readJobDescription(): string {
+  const file = join(contextDir(), JD_FILE)
+  return existsSync(file) ? readFileSync(file, 'utf8') : ''
+}
+
+/** Save the job description; empty text removes it. */
+export function writeJobDescription(text: string): void {
+  const file = join(contextDir(), JD_FILE)
+  if (text.trim()) writeFileSync(file, text.trim() + '\n', 'utf8')
+  else if (existsSync(file)) unlinkSync(file)
 }
 
 /**
