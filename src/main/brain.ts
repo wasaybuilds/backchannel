@@ -4,7 +4,7 @@ import {
   briefingPdfs, FULL_MODEL, GEMINI_FULL_MODEL, GEMINI_GIST_MODEL, GIST_MODEL, keys, languages,
   MATCH_SPEAKER, meetingContext
 } from './config'
-import { streamGemini, toGemini, type GeminiRequest } from './gemini'
+import { GeminiError, streamGemini, toGemini, type GeminiRequest } from './gemini'
 import type { Transcript } from './transcript'
 
 /**
@@ -91,13 +91,28 @@ You are the FAST tier. A fuller answer is already streaming in behind you, so yo
 
 const fullPersona = (): string => PERSONA + languageRule()
 
+/** Devanagari (how Deepgram's `multi` writes Urdu) and Arabic script (`ur`). */
+const URDU_SCRIPT = /[ऀ-ॿ؀-ۿݐ-ݿ]/
+
 /**
- * The fast model drifts into Devanagari or Urdu script when the question
- * arrives in it, despite the persona. Repeating the rule in the final turn is
- * what holds it, and that turn is uncached anyway so it costs nothing extra.
+ * The language to answer this question in, stated in the final turn.
+ *
+ * Fast models drift: told to "match the speaker" Flash-Lite answered an
+ * English question in Roman Urdu, and the fast tier slips into Devanagari when
+ * the question arrives in it. So the code decides rather than the model — the
+ * transcript's script says which language was spoken, since English arrives in
+ * Latin letters and Urdu never does. The final turn is uncached, so this costs
+ * nothing extra.
  */
-const scriptReminder = (): string =>
-  languages.reply.trim().toLowerCase() === 'english' ? '' : ' Latin letters only — no Devanagari, no Urdu script.'
+function replyHint(question: string): string {
+  const reply = languages.reply.trim().toLowerCase()
+  if (reply === 'english') return ''
+  const latinOnly = ' Latin letters only — no Devanagari, no Urdu script.'
+  if (reply !== MATCH_SPEAKER) return latinOnly
+  return URDU_SCRIPT.test(question)
+    ? ` They asked in Urdu: answer in Roman Urdu.${latinOnly}`
+    : ' They asked in English: answer in English.'
+}
 
 /**
  * Coding mode is deliberately the opposite of the spoken persona: you are going
@@ -148,6 +163,14 @@ type Attempt = (onText: (text: string) => void, signal: AbortSignal, alive: () =
  * legitimately think for longer than this before writing anything.
  */
 const CLAUDE_START_MS = 10_000
+/**
+ * How long Gemini's answer model may take to start before Flash-Lite answers
+ * instead. Gemini thinks before it sends a byte, so this covers thinking: ~3s
+ * at LOW when healthy, but 3.8 Flash was seen sitting silent for 50–90s.
+ */
+const GEMINI_START_MS = 10_000
+/** Code questions think at MEDIUM, which legitimately takes longer. */
+const GEMINI_CODE_START_MS = 25_000
 /** After a key, permission or billing failure — it will not fix itself soon. */
 const HARD_COOLDOWN_MS = 30 * 60_000
 /** After an overload, rate limit or network blip — worth retrying shortly. */
@@ -257,7 +280,7 @@ export class Brain {
           return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`
         },
         (onText, attempt) =>
-          this.viaGemini(GEMINI_FULL_MODEL, CODE_PERSONA + languageRule(), messages, 8000, 'MEDIUM', onText, attempt)
+          this.viaGemini(GEMINI_FULL_MODEL, CODE_PERSONA + languageRule(), messages, 8000, 'MEDIUM', onText, attempt, GEMINI_CODE_START_MS)
       )
       this.events.onDone(id, 'code')
     } catch (err) {
@@ -275,7 +298,7 @@ export class Brain {
       ...this.briefingTurns(),
       {
         role: 'user',
-        content: `Recent call transcript:\n${this.transcript.tail(8)}\n\nTHEM just asked: ${question}\n\nOne sentence they can start saying now.${scriptReminder()}`
+        content: `Recent call transcript:\n${this.transcript.tail(8)}\n\nTHEM just asked: ${question}\n\nOne sentence they can start saying now.${replyHint(question)}`
       }
     ]
 
@@ -329,7 +352,7 @@ export class Brain {
 
     this.seedBriefing()
 
-    const text = `New speech since your last answer:\n${delta}\n\nAnswer this: ${question}`
+    const text = `New speech since your last answer:\n${delta}\n\nAnswer this: ${question}${replyHint(question)}`
     const content: UserContent = screenshot
       ? [
           { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: screenshot } },
@@ -475,19 +498,52 @@ export class Brain {
     maxOutputTokens: number,
     thinkingLevel: GeminiRequest['thinkingLevel'],
     onText: (text: string) => void,
-    signal: AbortSignal
+    signal: AbortSignal,
+    patienceMs = GEMINI_START_MS
   ): Promise<string> {
-    const u = await streamGemini({
-      apiKey: keys.gemini,
-      model,
-      system: `${persona}\n\nMEETING CONTEXT\n${meetingContext()}`,
-      contents: toGemini(messages),
-      maxOutputTokens,
-      thinkingLevel,
-      signal,
-      onText
-    })
-    return `${model} in=${u.promptTokenCount ?? 0} cached=${u.cachedContentTokenCount ?? 0} out=${u.candidatesTokenCount ?? 0} thinking=${u.thoughtsTokenCount ?? 0}`
+    let started = false
+    const run = async (m: string, level: GeminiRequest['thinkingLevel'], sig: AbortSignal, onOpen?: () => void): Promise<string> => {
+      const u = await streamGemini({
+        apiKey: keys.gemini,
+        model: m,
+        system: `${persona}\n\nMEETING CONTEXT\n${meetingContext()}`,
+        contents: toGemini(messages),
+        maxOutputTokens,
+        thinkingLevel: level,
+        signal: sig,
+        onOpen,
+        onText: (text) => {
+          started = true
+          onText(text)
+        }
+      })
+      return `${m} in=${u.promptTokenCount ?? 0} cached=${u.cachedContentTokenCount ?? 0} out=${u.candidatesTokenCount ?? 0} thinking=${u.thoughtsTokenCount ?? 0}`
+    }
+
+    // Flash-Lite is the backup, so it has nothing to fall back to.
+    if (model === GEMINI_GIST_MODEL) return run(model, thinkingLevel, signal)
+
+    // Gemini models get overloaded independently (3.7 Flash returned 503 while
+    // Flash-Lite answered in a second), so a silent or failing answer model
+    // hands the question to Flash-Lite rather than leaving the user waiting.
+    const attempt = new AbortController()
+    const relay = (): void => attempt.abort()
+    signal.addEventListener('abort', relay)
+    const timer = setTimeout(() => attempt.abort(), patienceMs)
+    try {
+      return await run(model, thinkingLevel, attempt.signal, () => clearTimeout(timer))
+    } catch (err) {
+      if (signal.aborted || started) throw err
+      // A bad key or a malformed request fails on Flash-Lite just the same.
+      if (err instanceof GeminiError && err.status < 500 && err.status !== 429) throw err
+      const why = attempt.signal.aborted ? `no response in ${patienceMs / 1000}s` : describe(err)
+      console.log(`[gemini] ${model} unavailable (${why}) — answering with ${GEMINI_GIST_MODEL}`)
+      // Flash-Lite's default thinking is minimal; keep it that way for speed.
+      return run(GEMINI_GIST_MODEL, undefined, signal)
+    } finally {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', relay)
+    }
   }
 
   /**

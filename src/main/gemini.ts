@@ -47,6 +47,9 @@ export interface GeminiRequest {
   thinkingLevel?: 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH'
   signal: AbortSignal
   onText(text: string): void
+  /** Called once Gemini accepts the request. Thinking happens before this on
+   *  Gemini, so it marks the end of the wait for the first word. */
+  onOpen?(): void
 }
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -76,6 +79,7 @@ export async function streamGemini(req: GeminiRequest): Promise<GeminiUsage> {
     }
     throw new GeminiError(res.status, message || res.statusText)
   }
+  req.onOpen?.()
 
   let usage: GeminiUsage = {}
   let buffer = ''

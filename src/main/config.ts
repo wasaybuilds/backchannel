@@ -61,9 +61,13 @@ export const GIST_MODEL = 'claude-haiku-4-5'
 /** The considered answer. Effort stays low — this is a live call, not an essay. */
 export const FULL_MODEL = 'claude-opus-5'
 
-/** Gemini fallback, same two tiers. Flash-Lite thinks minimally by default. */
+/**
+ * Gemini fallback, same two tiers. Flash-Lite thinks minimally by default.
+ * 3.6 Flash for the full answer: measured at ~3s to first word at LOW thinking,
+ * where 3.8 Flash took 50–90s on the same key and 3.7 Flash returned 503.
+ */
 export const GEMINI_GIST_MODEL = process.env.GEMINI_FAST_MODEL || 'gemini-3.5-flash-lite'
-export const GEMINI_FULL_MODEL = process.env.GEMINI_FULL_MODEL || 'gemini-3.8-flash'
+export const GEMINI_FULL_MODEL = process.env.GEMINI_FULL_MODEL || 'gemini-3.6-flash'
 
 /** Text formats we can drop straight into the prompt. */
 const READABLE = ['.md', '.txt', '.json', '.csv', '.ts', '.js', '.py', '.sql', '.yaml', '.yml']
