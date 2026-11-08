@@ -24,7 +24,7 @@ export interface ServerHooks {
   state(): {
     warm: boolean; listening: boolean; language: string; reply: string
     /** Which model answered last, and why Claude is benched if it is. */
-    provider: 'claude' | 'gemini' | null; claudeDown: string
+    provider: 'claude' | 'openai' | 'grok' | 'groq' | 'gemini' | null; down: string
   }
 }
 

@@ -192,7 +192,7 @@ function startConsole(): void {
       listening: Boolean(stt),
       language: languages.stt,
       reply: languages.reply,
-      ...(brain?.status() ?? { provider: null, claudeDown: '' })
+      ...(brain?.status() ?? { provider: null, down: '' })
     })
   })
   console_.listen(port, lan)

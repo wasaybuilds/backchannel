@@ -13,21 +13,105 @@ function required(name: string): string {
 
 /**
  * Names of credentials that are absent, so startup can report instead of crash.
- * Answers need Claude or Gemini, not both: with both set, Gemini is the fallback.
+ * Answers need any one provider; with several set, the rest are fallbacks.
  */
 export function missingKeys(): string[] {
   const missing = process.env.DEEPGRAM_API_KEY ? [] : ['DEEPGRAM_API_KEY']
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.GEMINI_API_KEY) {
-    missing.push('ANTHROPIC_API_KEY or GEMINI_API_KEY')
+  if (!PROVIDERS.some((p) => keys[p])) {
+    missing.push('ANTHROPIC_API_KEY, OPENAI_API_KEY, XAI_API_KEY, GROQ_API_KEY or GEMINI_API_KEY')
   }
   return missing
 }
 
 export const keys = {
   get deepgram() { return required('DEEPGRAM_API_KEY') },
-  /** Empty when unset — either answer provider may be absent. */
-  get anthropic() { return process.env.ANTHROPIC_API_KEY ?? '' },
+  /** Empty when unset — any answer provider may be absent. */
+  get claude() { return process.env.ANTHROPIC_API_KEY ?? '' },
+  get openai() { return process.env.OPENAI_API_KEY ?? '' },
+  get grok() { return process.env.XAI_API_KEY || process.env.GROK_API_KEY || '' },
+  get groq() { return process.env.GROQ_API_KEY ?? '' },
   get gemini() { return process.env.GEMINI_API_KEY ?? '' }
+}
+
+export type Provider = 'claude' | 'openai' | 'grok' | 'groq' | 'gemini'
+export const PROVIDERS: Provider[] = ['claude', 'openai', 'grok', 'groq', 'gemini']
+
+export const PROVIDER_NAMES: Record<Provider, string> = {
+  claude: 'Claude',
+  openai: 'OpenAI',
+  grok: 'Grok',
+  groq: 'Groq',
+  gemini: 'Gemini'
+}
+
+/**
+ * Which provider to try first, then next. Providers without a key are skipped.
+ * Set PROVIDER_ORDER=gemini,claude to change it; unknown names are ignored and
+ * any provider left out is appended, so a key is never silently unused.
+ */
+export function providerOrder(): Provider[] {
+  const asked = (process.env.PROVIDER_ORDER ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .map((s) => (s === 'anthropic' ? 'claude' : s === 'xai' ? 'grok' : s))
+    .filter((s): s is Provider => (PROVIDERS as string[]).includes(s))
+  const order = [...new Set([...asked, ...PROVIDERS])]
+  return order.filter((p) => keys[p])
+}
+
+/** The OpenAI-compatible providers: same wire format, different models. */
+export interface ChatProvider {
+  baseUrl: string
+  /** Gist tier — the one-line opener. */
+  fast: string
+  /** Full and code tiers. */
+  full: string
+  effort: { fast?: string; full?: string; code?: string }
+  tokenField: 'max_tokens' | 'max_completion_tokens'
+  /** False when the models take text only: PDFs are left out, screenshot questions skip it. */
+  files: boolean
+  /** Send only this many recent turns, to stay under a small tokens-per-minute limit. */
+  maxTurns?: number
+}
+
+export type ChatProviderId = 'openai' | 'grok' | 'groq'
+
+export const CHAT_PROVIDERS: Record<ChatProviderId, ChatProvider> = {
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    // Luna is OpenAI's fastest tier and takes effort `none`; Terra is the fast
+    // general model. Sol and Astra reject `none` and are slower.
+    fast: process.env.OPENAI_FAST_MODEL || 'gpt-6-luna',
+    full: process.env.OPENAI_FULL_MODEL || 'gpt-6.1-terra',
+    effort: { fast: 'none', full: 'low', code: 'medium' },
+    tokenField: 'max_completion_tokens',
+    files: true
+  },
+  grok: {
+    baseUrl: 'https://api.x.ai/v1',
+    // Grok's reasoning cannot be turned off, and its Fast variant is not on
+    // the public API, so both tiers use the same model at low effort.
+    fast: process.env.GROK_FAST_MODEL || 'grok-4.7',
+    full: process.env.GROK_FULL_MODEL || 'grok-4.7',
+    effort: { fast: 'low', full: 'low', code: 'medium' },
+    tokenField: 'max_tokens',
+    files: true
+  },
+  groq: {
+    baseUrl: 'https://api.groq.com/openai/v1',
+    // Measured: 120B finishes a full answer in ~1.7s, 20B the opener in ~1.4s,
+    // both writing good Roman Urdu. Qwen was faster but answered an Urdu
+    // question in English despite being told not to.
+    fast: process.env.GROQ_FAST_MODEL || 'openai/gpt-oss-20b',
+    full: process.env.GROQ_FULL_MODEL || 'openai/gpt-oss-120b',
+    effort: { fast: 'low', full: 'low', code: 'medium' },
+    tokenField: 'max_completion_tokens',
+    // Groq's models read text only.
+    files: false,
+    // The free tier allows 8,000 tokens a minute per model, and the briefing
+    // alone is a few thousand, so only the last three exchanges go along.
+    maxTurns: 6
+  }
 }
 
 /**

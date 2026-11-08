@@ -198,9 +198,9 @@ function render(s) {
     if (s.language) bits.push('hears ' + s.language);
     if (s.reply) bits.push('replies ' + s.reply);
     bits.push(s.warm ? 'cache warm' : 'cache cold');
-    if (s.claudeDown) bits.push('via Gemini');
-    else if (s.provider) bits.push('via ' + (s.provider === 'claude' ? 'Claude' : 'Gemini'));
-    $('#meta').title = s.claudeDown ? 'Claude unavailable: ' + s.claudeDown : '';
+    var NAMES = { claude: 'Claude', openai: 'OpenAI', grok: 'Grok', groq: 'Groq', gemini: 'Gemini' };
+    if (s.provider) bits.push('via ' + (NAMES[s.provider] || s.provider));
+    $('#meta').title = s.down ? 'Skipping for now:\n' + s.down : '';
     $('#meta').textContent = bits.join(' · ');
   }
 }

@@ -1,9 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { AnswerTier } from '@shared/ipc'
+import { randomUUID } from 'node:crypto'
 import {
-  briefingPdfs, FULL_MODEL, GEMINI_FULL_MODEL, GEMINI_GIST_MODEL, GIST_MODEL, keys, languages,
-  MATCH_SPEAKER, meetingContext
+  briefingPdfs, CHAT_PROVIDERS, type ChatProviderId, FULL_MODEL, GEMINI_FULL_MODEL, GEMINI_GIST_MODEL, GIST_MODEL, keys,
+  languages, MATCH_SPEAKER, meetingContext, PROVIDER_NAMES, providerOrder, type Provider
 } from './config'
+import { streamChat, toChat } from './chat'
 import { GeminiError, streamGemini, toGemini, type GeminiRequest } from './gemini'
 import type { Transcript } from './transcript'
 
@@ -147,7 +149,7 @@ export interface BrainEvents {
 
 type UserContent = Anthropic.MessageParam['content']
 
-export type Provider = 'claude' | 'gemini'
+export type { Provider }
 
 /**
  * Streams one answer, calling `onText` per chunk; resolves to a usage log line.
@@ -155,56 +157,62 @@ export type Provider = 'claude' | 'gemini'
  */
 type Attempt = (onText: (text: string) => void, signal: AbortSignal, alive: () => void) => Promise<string>
 
+/** One way to answer the current question per provider. A provider left out
+ *  cannot take this question (Groq has no eyes for a screenshot). */
+type Attempts = Partial<Record<Provider, Attempt>>
+
 /**
- * How long Claude may take to start responding before we give up on it for
- * this answer. It responds in well under a second when healthy; anything near
- * this is a hang or an overloaded API, and a live call cannot wait it out.
- * Measured to the first stream event, not the first word — a code question can
- * legitimately think for longer than this before writing anything.
+ * How long a provider may take to start responding before the next one gets
+ * the question. Healthy APIs respond in well under a second; anything near
+ * this is a hang or an overload, and a live call cannot wait it out. Measured
+ * to the first sign of life, not the first word — a model can legitimately
+ * think for longer than this before writing anything.
+ *
+ * Gemini is the exception: it sends nothing until it has finished thinking, so
+ * there this covers thinking too — ~3s at LOW when healthy, but 3.8 Flash was
+ * seen sitting silent for 50–90s.
  */
-const CLAUDE_START_MS = 10_000
-/**
- * How long Gemini's answer model may take to start before Flash-Lite answers
- * instead. Gemini thinks before it sends a byte, so this covers thinking: ~3s
- * at LOW when healthy, but 3.8 Flash was seen sitting silent for 50–90s.
- */
-const GEMINI_START_MS = 10_000
-/** Code questions think at MEDIUM, which legitimately takes longer. */
-const GEMINI_CODE_START_MS = 25_000
+const START_MS = 10_000
+/** Code questions think at medium effort, which legitimately takes longer. */
+const CODE_START_MS = 25_000
 /** After a key, permission or billing failure — it will not fix itself soon. */
 const HARD_COOLDOWN_MS = 30 * 60_000
-/** After an overload, rate limit or network blip — worth retrying shortly. */
+/** After an overload or network blip — worth retrying shortly. */
 const SOFT_COOLDOWN_MS = 2 * 60_000
+/** After a per-minute rate limit, which clears on its own within the minute. */
+const RATE_COOLDOWN_MS = 30_000
 
 export class Brain {
-  /** Null when there is no Anthropic key; Gemini then answers everything. */
-  private client = keys.anthropic
+  /** Null when there is no Anthropic key; the other providers answer. */
+  private client = keys.claude
     ? new Anthropic({
-        apiKey: keys.anthropic,
+        apiKey: keys.claude,
         // With a fallback ready, the SDK's own retries only delay it.
-        maxRetries: keys.gemini ? 0 : 2
+        maxRetries: providerOrder().length > 1 ? 0 : 2
       })
     : null
   /** Canonical conversation for the full tier. Append-only, so the cache prefix grows. */
   private history: Anthropic.MessageParam[] = []
   private inFlight: AbortController | null = null
   private seq = 0
-  /** Claude is skipped until this time after it fails. */
-  private claudeDownUntil = 0
-  private claudeDownReason = ''
+  /** Providers that failed recently, skipped until `until`. */
+  private benched = new Map<Provider, { until: number; reason: string }>()
   private lastProvider: Provider | null = null
+  /** xAI routes requests carrying the same id to a warm prompt cache. */
+  private convId = randomUUID()
 
   constructor(
     private readonly transcript: Transcript,
     private readonly events: BrainEvents
   ) {}
 
-  /** Which provider answered last, and why Claude is benched if it is. */
-  status(): { provider: Provider | null; claudeDown: string } {
-    return {
-      provider: this.lastProvider,
-      claudeDown: !this.client ? 'no key' : this.claudeUsable() ? '' : this.claudeDownReason
-    }
+  /** Which provider answered last, and which are being skipped and why. */
+  status(): { provider: Provider | null; down: string } {
+    const down = providerOrder().flatMap((p) => {
+      const b = this.benched.get(p)
+      return b && Date.now() < b.until ? [`${PROVIDER_NAMES[p]}: ${b.reason}`] : []
+    })
+    return { provider: this.lastProvider, down: down.join('\n') }
   }
 
   /**
@@ -249,38 +257,46 @@ export class Brain {
         role: 'user',
         content:
           `From my editor:\n\n${snippet}\n\n` +
-          (spokenQuestion ? `They just asked: ${spokenQuestion}` : 'Solve it.')
+          (spokenQuestion ? `They just asked: ${spokenQuestion}` : 'Solve it.') +
+          replyHint(spokenQuestion)
       }
     ]
 
     try {
+      const persona = CODE_PERSONA + languageRule()
       await this.route(
         'code',
         controller.signal,
         (text) => this.events.onDelta(id, 'code', text),
-        async (onText, attempt, alive) => {
-          const stream = this.claude().messages.stream(
-            {
-              model: FULL_MODEL,
-              max_tokens: 4000,
-              output_config: { effort: 'medium' },
-              system: [
-                { type: 'text', text: CODE_PERSONA + languageRule() },
-                {
-                  type: 'text',
-                  text: `MEETING CONTEXT\n${meetingContext()}`,
-                  cache_control: { type: 'ephemeral' }
-                }
-              ],
-              messages
-            },
-            { signal: attempt }
-          )
-          const u = (await pump(stream, onText, alive)).usage
-          return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`
+        {
+          claude: async (onText, attempt, alive) => {
+            const stream = this.claude().messages.stream(
+              {
+                model: FULL_MODEL,
+                max_tokens: 4000,
+                output_config: { effort: 'medium' },
+                system: [
+                  { type: 'text', text: persona },
+                  {
+                    type: 'text',
+                    text: `MEETING CONTEXT\n${meetingContext()}`,
+                    cache_control: { type: 'ephemeral' }
+                  }
+                ],
+                messages
+              },
+              { signal: attempt }
+            )
+            const u = (await pump(stream, onText, alive)).usage
+            return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} out=${u.output_tokens}`
+          },
+          openai: (onText, attempt, alive) => this.viaChat('openai', 'code', persona, messages, 8000, onText, attempt, alive),
+          grok: (onText, attempt, alive) => this.viaChat('grok', 'code', persona, messages, 8000, onText, attempt, alive),
+          groq: (onText, attempt, alive) => this.viaChat('groq', 'code', persona, messages, 8000, onText, attempt, alive),
+          gemini: (onText, attempt, alive) =>
+            this.viaGemini(GEMINI_FULL_MODEL, persona, messages, 8000, 'MEDIUM', onText, attempt, alive, CODE_START_MS)
         },
-        (onText, attempt) =>
-          this.viaGemini(GEMINI_FULL_MODEL, CODE_PERSONA + languageRule(), messages, 8000, 'MEDIUM', onText, attempt, GEMINI_CODE_START_MS)
+        CODE_START_MS
       )
       this.events.onDone(id, 'code')
     } catch (err) {
@@ -307,33 +323,39 @@ export class Brain {
         'gist',
         signal,
         (text) => this.events.onDelta(id, 'gist', text),
-        async (onText, attempt, alive) => {
-          const stream = this.claude().messages.stream(
-            {
-              model: GIST_MODEL,
-              max_tokens: 200,
-              // NOTE: no top-level cache_control here. This tier keeps no history,
-              // so its last block is the ever-changing transcript tail — auto-caching
-              // it would rewrite the cache every call and never read one. The
-              // breakpoints below sit on the stable prefix instead.
-              system: [
-                { type: 'text', text: gistPersona() },
-                {
-                  type: 'text',
-                  text: `MEETING CONTEXT\n${meetingContext()}`,
-                  cache_control: { type: 'ephemeral' }
-                }
-              ],
-              messages
-            },
-            { signal: attempt }
-          )
-          const u = (await pump(stream, onText, alive)).usage
-          return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens}`
-        },
-        (onText, attempt) =>
-          // Flash-Lite already thinks minimally by default; the headroom covers it.
-          this.viaGemini(GEMINI_GIST_MODEL, gistPersona(), messages, 600, undefined, onText, attempt)
+        {
+          claude: async (onText, attempt, alive) => {
+            const stream = this.claude().messages.stream(
+              {
+                model: GIST_MODEL,
+                max_tokens: 200,
+                // NOTE: no top-level cache_control here. This tier keeps no history,
+                // so its last block is the ever-changing transcript tail — auto-caching
+                // it would rewrite the cache every call and never read one. The
+                // breakpoints below sit on the stable prefix instead.
+                system: [
+                  { type: 'text', text: gistPersona() },
+                  {
+                    type: 'text',
+                    text: `MEETING CONTEXT\n${meetingContext()}`,
+                    cache_control: { type: 'ephemeral' }
+                  }
+                ],
+                messages
+              },
+              { signal: attempt }
+            )
+            const u = (await pump(stream, onText, alive)).usage
+            return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens}`
+          },
+          // The budget includes reasoning, which Grok cannot switch off.
+          openai: (onText, attempt, alive) => this.viaChat('openai', 'fast', gistPersona(), messages, 1500, onText, attempt, alive),
+          grok: (onText, attempt, alive) => this.viaChat('grok', 'fast', gistPersona(), messages, 1500, onText, attempt, alive),
+          groq: (onText, attempt, alive) => this.viaChat('groq', 'fast', gistPersona(), messages, 1500, onText, attempt, alive),
+          gemini: (onText, attempt, alive) =>
+            // Flash-Lite already thinks minimally by default; the headroom covers it.
+            this.viaGemini(GEMINI_GIST_MODEL, gistPersona(), messages, 600, undefined, onText, attempt, alive)
+        }
       )
       this.events.onDone(id, 'gist')
     } catch (err) {
@@ -371,34 +393,42 @@ export class Brain {
           answer += chunk
           this.events.onDelta(id, 'full', chunk)
         },
-        async (onText, attempt, alive) => {
-          const stream = this.claude().messages.stream(
-            {
-              model: FULL_MODEL,
-              max_tokens: 1500,
-              // Low effort keeps thinking short. Do not disable thinking on Opus 5 —
-              // it starts writing tool calls and stray tags into visible text.
-              output_config: { effort: 'low' },
-              // Auto-caches the last cacheable block, so the persona, the meeting
-              // context and the whole conversation so far replay at ~10% of cost.
-              cache_control: { type: 'ephemeral' },
-              system: [
-                { type: 'text', text: fullPersona() },
-                { type: 'text', text: `MEETING CONTEXT\n${meetingContext()}` }
-              ],
-              messages: this.history
-            },
-            { signal: attempt }
-          )
-          const final = await pump(stream, onText, alive)
-          if (final.stop_reason === 'refusal') this.events.onError('Claude declined that one.')
-          // Log cache effectiveness — if reads stay at 0, something is invalidating
-          // the prefix and the call is costing ~10x what it should.
-          const u = final.usage
-          return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens}`
-        },
-        (onText, attempt) =>
-          this.viaGemini(GEMINI_FULL_MODEL, fullPersona(), this.history, 4000, 'LOW', onText, attempt)
+        {
+          claude: async (onText, attempt, alive) => {
+            const stream = this.claude().messages.stream(
+              {
+                model: FULL_MODEL,
+                max_tokens: 1500,
+                // Low effort keeps thinking short. Do not disable thinking on Opus 5 —
+                // it starts writing tool calls and stray tags into visible text.
+                output_config: { effort: 'low' },
+                // Auto-caches the last cacheable block, so the persona, the meeting
+                // context and the whole conversation so far replay at ~10% of cost.
+                cache_control: { type: 'ephemeral' },
+                system: [
+                  { type: 'text', text: fullPersona() },
+                  { type: 'text', text: `MEETING CONTEXT\n${meetingContext()}` }
+                ],
+                messages: this.history
+              },
+              { signal: attempt }
+            )
+            const final = await pump(stream, onText, alive)
+            if (final.stop_reason === 'refusal') this.events.onError('Claude declined that one.')
+            // Log cache effectiveness — if reads stay at 0, something is invalidating
+            // the prefix and the call is costing ~10x what it should.
+            const u = final.usage
+            return `in=${u.input_tokens} cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens}`
+          },
+          openai: (onText, attempt, alive) => this.viaChat('openai', 'full', fullPersona(), this.history, 4000, onText, attempt, alive),
+          grok: (onText, attempt, alive) => this.viaChat('grok', 'full', fullPersona(), this.history, 4000, onText, attempt, alive),
+          // Text-only: a screenshot question goes to a provider that can see it.
+          groq: screenshot
+            ? undefined
+            : (onText, attempt, alive) => this.viaChat('groq', 'full', fullPersona(), this.history, 4000, onText, attempt, alive),
+          gemini: (onText, attempt, alive) =>
+            this.viaGemini(GEMINI_FULL_MODEL, fullPersona(), this.history, 4000, 'LOW', onText, attempt, alive)
+        }
       )
 
       this.history.push({ role: 'assistant', content: answer || '(no answer)' })
@@ -412,20 +442,20 @@ export class Brain {
   }
 
   /**
-   * Run one answer on Claude, falling back to Gemini.
+   * Run one answer down the provider chain (PROVIDER_ORDER, keys present).
    *
-   * Falls back only if Claude fails before its first word. Once text is on
-   * screen, switching providers would splice two different answers together,
-   * so a mid-stream failure is reported instead. After a failure Claude is
-   * benched for a while, so the next questions go straight to Gemini rather
-   * than paying for the same failure every time.
+   * Moves to the next provider only if the current one fails before its first
+   * word. Once text is on screen, switching would splice two different answers
+   * together, so a mid-stream failure is reported instead. A provider that
+   * fails is benched for a while, so the next questions skip straight past it
+   * rather than paying for the same failure every time.
    */
   private async route(
     tier: AnswerTier,
     signal: AbortSignal,
     onText: (text: string) => void,
-    viaClaude: Attempt,
-    viaGemini: Attempt
+    attempts: Attempts,
+    patienceMs = START_MS
   ): Promise<void> {
     const began = Date.now()
     let firstWord = 0
@@ -434,42 +464,48 @@ export class Brain {
       onText(text)
     }
 
-    if (this.claudeUsable()) {
-      // A per-attempt controller, so a silent Claude can be cut off without
+    const order = providerOrder().filter((p) => attempts[p])
+    if (!order.length) throw new Error('No answer provider for this question — set an API key in .env')
+    // If every provider is benched, try them all anyway: a bench that may be
+    // stale is better than no answer.
+    const ready = order.filter((p) => this.usable(p))
+    const chain = ready.length ? ready : order
+
+    for (const [i, p] of chain.entries()) {
+      const last = i === chain.length - 1
+      // A per-attempt controller, so a silent provider can be cut off without
       // cancelling the answer itself.
       const attempt = new AbortController()
       const relay = (): void => attempt.abort()
       signal.addEventListener('abort', relay)
-      const watchdog = keys.gemini ? setTimeout(() => attempt.abort(), CLAUDE_START_MS) : null
+      // Gemini runs its own backup model inside the attempt, so it gets time
+      // for both before the chain moves on. The last provider has nothing to
+      // cut over to, so it is never cut off.
+      const wait = p === 'gemini' && tier !== 'gist' ? patienceMs * 2 : patienceMs
+      const watchdog = last ? null : setTimeout(() => attempt.abort(), wait)
       const alive = (): void => {
         if (watchdog) clearTimeout(watchdog)
       }
 
       try {
-        const usage = await viaClaude(emit, attempt.signal, alive)
-        this.lastProvider = 'claude'
-        console.log(`[${tier} usage] claude ttft=${firstWord}ms ${usage}`)
+        const usage = await attempts[p]!(emit, attempt.signal, alive)
+        this.lastProvider = p
+        this.benched.delete(p)
+        console.log(`[${tier} usage] ${p} ttft=${firstWord}ms ${usage}`)
         return
       } catch (err) {
-        if (signal.aborted || firstWord || !keys.gemini) throw err
-        this.benchClaude(attempt.signal.aborted ? new Error(`no response in ${CLAUDE_START_MS / 1000}s`) : err)
+        if (signal.aborted || firstWord || last) throw err
+        this.bench(p, attempt.signal.aborted ? new Error(`no response in ${wait / 1000}s`) : err, chain[i + 1])
       } finally {
         if (watchdog) clearTimeout(watchdog)
         signal.removeEventListener('abort', relay)
       }
     }
-
-    if (!keys.gemini) {
-      throw new Error(this.claudeDownReason || 'No answer provider — set ANTHROPIC_API_KEY or GEMINI_API_KEY')
-    }
-    // No watchdog on Gemini: it is the last resort, so there is nothing to cut over to.
-    const usage = await viaGemini(emit, signal, () => {})
-    this.lastProvider = 'gemini'
-    console.log(`[${tier} usage] gemini ttft=${firstWord}ms ${usage}`)
   }
 
-  private claudeUsable(): boolean {
-    return Boolean(this.client) && Date.now() >= this.claudeDownUntil
+  private usable(p: Provider): boolean {
+    const b = this.benched.get(p)
+    return !b || Date.now() >= b.until
   }
 
   private claude(): Anthropic {
@@ -477,18 +513,59 @@ export class Brain {
     return this.client
   }
 
-  private benchClaude(err: unknown): void {
-    const status = err instanceof Anthropic.APIError ? err.status : undefined
+  private bench(p: Provider, err: unknown, next?: Provider): void {
+    const status = (err as { status?: unknown } | null)?.status
     const message = describe(err)
     // Bad key, no permission, or out of credit: retrying in seconds is pointless.
-    const hard = status === 401 || status === 403 || /credit balance|billing/i.test(message)
-    const ms = hard ? HARD_COOLDOWN_MS : SOFT_COOLDOWN_MS
+    // A per-minute limit clears by itself, often in seconds — and Groq's says
+    // exactly when ("try again in 6.75s"). Checked first, because the same
+    // message also links to the billing page.
+    const rateLimited = status === 429 && /rate limit|per minute|try again in/i.test(message)
+    const retryIn = Number(/try again in (\d+(?:\.\d+)?)s/i.exec(message)?.[1])
+    const hard =
+      !rateLimited &&
+      (status === 401 || status === 403 || /credit|billing|quota|api key not valid/i.test(message))
+    const ms = rateLimited
+      ? Math.min(RATE_COOLDOWN_MS, retryIn ? Math.ceil(retryIn * 1000) : RATE_COOLDOWN_MS)
+      : hard
+        ? HARD_COOLDOWN_MS
+        : SOFT_COOLDOWN_MS
     // Gist and full fail together; only announce it once.
-    if (Date.now() >= this.claudeDownUntil) {
-      console.log(`[brain] Claude unavailable (${message}) — answering with Gemini for ${ms / 60_000} min`)
+    if (this.usable(p)) {
+      const then = next ? `answering with ${PROVIDER_NAMES[next]}` : 'trying the next provider'
+      console.log(`[brain] ${PROVIDER_NAMES[p]} unavailable (${message}) — ${then}; skipping it for ${ms / 1000}s`)
     }
-    this.claudeDownUntil = Date.now() + ms
-    this.claudeDownReason = message
+    this.benched.set(p, { until: Date.now() + ms, reason: message })
+  }
+
+  /** One answer from OpenAI, Grok or Groq. */
+  private async viaChat(
+    p: ChatProviderId,
+    size: 'fast' | 'full' | 'code',
+    persona: string,
+    messages: Anthropic.MessageParam[],
+    maxTokens: number,
+    onText: (text: string) => void,
+    signal: AbortSignal,
+    alive: () => void
+  ): Promise<string> {
+    const cfg = CHAT_PROVIDERS[p]
+    const model = size === 'fast' ? cfg.fast : cfg.full
+    const u = await streamChat({
+      provider: PROVIDER_NAMES[p],
+      baseUrl: cfg.baseUrl,
+      apiKey: keys[p],
+      model,
+      messages: toChat(`${persona}\n\nMEETING CONTEXT\n${meetingContext()}`, recent(messages, cfg.maxTurns), { files: cfg.files }),
+      maxTokens,
+      tokenField: cfg.tokenField,
+      reasoningEffort: cfg.effort[size],
+      headers: p === 'grok' ? { 'x-grok-conv-id': this.convId } : undefined,
+      signal,
+      onOpen: alive,
+      onText
+    })
+    return `${model} in=${u.prompt_tokens ?? 0} cached=${u.prompt_tokens_details?.cached_tokens ?? 0} out=${u.completion_tokens ?? 0} reasoning=${u.completion_tokens_details?.reasoning_tokens ?? 0}`
   }
 
   private async viaGemini(
@@ -499,7 +576,8 @@ export class Brain {
     thinkingLevel: GeminiRequest['thinkingLevel'],
     onText: (text: string) => void,
     signal: AbortSignal,
-    patienceMs = GEMINI_START_MS
+    alive: () => void,
+    patienceMs = START_MS
   ): Promise<string> {
     let started = false
     const run = async (m: string, level: GeminiRequest['thinkingLevel'], sig: AbortSignal, onOpen?: () => void): Promise<string> => {
@@ -521,7 +599,7 @@ export class Brain {
     }
 
     // Flash-Lite is the backup, so it has nothing to fall back to.
-    if (model === GEMINI_GIST_MODEL) return run(model, thinkingLevel, signal)
+    if (model === GEMINI_GIST_MODEL) return run(model, thinkingLevel, signal, alive)
 
     // Gemini models get overloaded independently (3.7 Flash returned 503 while
     // Flash-Lite answered in a second), so a silent or failing answer model
@@ -531,7 +609,10 @@ export class Brain {
     signal.addEventListener('abort', relay)
     const timer = setTimeout(() => attempt.abort(), patienceMs)
     try {
-      return await run(model, thinkingLevel, attempt.signal, () => clearTimeout(timer))
+      return await run(model, thinkingLevel, attempt.signal, () => {
+        clearTimeout(timer)
+        alive()
+      })
     } catch (err) {
       if (signal.aborted || started) throw err
       // A bad key or a malformed request fails on Flash-Lite just the same.
@@ -539,7 +620,7 @@ export class Brain {
       const why = attempt.signal.aborted ? `no response in ${patienceMs / 1000}s` : describe(err)
       console.log(`[gemini] ${model} unavailable (${why}) — answering with ${GEMINI_GIST_MODEL}`)
       // Flash-Lite's default thinking is minimal; keep it that way for speed.
-      return run(GEMINI_GIST_MODEL, undefined, signal)
+      return run(GEMINI_GIST_MODEL, undefined, signal, alive)
     } finally {
       clearTimeout(timer)
       signal.removeEventListener('abort', relay)
@@ -555,15 +636,36 @@ export class Brain {
    * while nobody is waiting. Requests are shaped exactly like the real ones up
    * to the cache breakpoint, or they would write a prefix nothing later reads.
    *
-   * Doubles as a health check: if Claude cannot answer now (out of credit, bad
-   * key), it is benched before the first question rather than during it.
-   * Gemini needs no warming; its cache is implicit.
+   * Doubles as a health check: a provider that cannot answer now (out of
+   * credit, bad key) is benched before the first question rather than during
+   * it. Gemini needs no warming and no check; its cache is implicit, and it
+   * already has its own backup model.
    */
   async prewarm(): Promise<void> {
-    if (!this.client) {
-      console.log('[prewarm] no ANTHROPIC_API_KEY — answering with Gemini')
-      return
+    const order = providerOrder()
+    console.log(`[prewarm] answer order: ${order.map((p) => PROVIDER_NAMES[p]).join(' → ')}`)
+    await Promise.all([this.warmClaude(), this.checkChat('openai'), this.checkChat('grok'), this.checkChat('groq')])
+  }
+
+  /**
+   * A one-word request, text only, to find out whether OpenAI, Grok or Groq will
+   * answer at all. A key with no credit left is otherwise only discovered on
+   * the first real question, which then waits for the failure.
+   */
+  private async checkChat(p: ChatProviderId): Promise<void> {
+    if (!keys[p] || providerOrder().length < 2) return
+    const began = Date.now()
+    try {
+      await this.viaChat(p, 'fast', 'Reply with one word.', [{ role: 'user', content: 'Ready?' }], 200, () => {}, AbortSignal.timeout(START_MS), () => {})
+      console.log(`[prewarm] ${PROVIDER_NAMES[p]} ready in ${Date.now() - began}ms`)
+    } catch (err) {
+      console.log(`[prewarm] ${PROVIDER_NAMES[p]} check failed — ${describe(err)}`)
+      this.bench(p, err)
     }
+  }
+
+  private async warmClaude(): Promise<void> {
+    if (!this.client) return
     const briefing = this.briefingTurns()
     const began = Date.now()
     const probe: Anthropic.MessageParam = { role: 'user', content: 'Ready?' }
@@ -599,7 +701,7 @@ export class Brain {
       `[prewarm] ${results.length - failures.length}/${results.length} tiers warmed in ${Date.now() - began}ms` +
         (failures.length ? ` — ${describe(failures[0])}` : '')
     )
-    if (failures.length === results.length && keys.gemini) this.benchClaude(failures[0])
+    if (failures.length === results.length && providerOrder().length > 1) this.bench('claude', failures[0])
   }
 
   private seedBriefing(): void {
@@ -651,6 +753,20 @@ export class Brain {
     this.inFlight?.abort()
     this.history = []
   }
+}
+
+/**
+ * The conversation cut down to its last `turns` messages, keeping the briefing
+ * pair at the front. Always ends on the current question and starts on a user
+ * turn, since `turns` is even and the history alternates.
+ */
+function recent(messages: Anthropic.MessageParam[], turns?: number): Anthropic.MessageParam[] {
+  if (!turns || messages.length <= turns + 1) return messages
+  const first = messages[0]
+  const briefing =
+    Array.isArray(first.content) && first.content.some((b) => b.type === 'document') ? messages.slice(0, 2) : []
+  const tail = messages.slice(-(turns + 1))
+  return [...briefing.filter((m) => !tail.includes(m)), ...tail]
 }
 
 /**
